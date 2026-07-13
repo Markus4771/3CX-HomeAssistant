@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "3CX verbinden",
+        "description": "Adresse der 3CX-Anlage eingeben. Version 0.1.0 prüft zunächst, ob der Webdienst erreichbar ist.",
+        "data": {
+          "host": "Host oder URL",
+          "port": "HTTPS-Port",
+          "username": "API-Benutzername",
+          "password": "API-Passwort",
+          "verify_ssl": "SSL-Zertifikat prüfen",
+          "api_mode": "API-Modus"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zur 3CX-Anlage nicht möglich.",
+      "unknown": "Unerwarteter Fehler. Bitte Home-Assistant-Protokoll prüfen."
+    },
+    "abort": {
+      "already_configured": "Diese 3CX-Anlage ist bereits eingerichtet."
+    }
+  }
+}
