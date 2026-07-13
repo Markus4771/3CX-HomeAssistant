@@ -23,6 +23,22 @@ class ThreeCXConnectionError(ThreeCXApiError):
     """Raised when the PBX cannot be reached."""
 
 
+@dataclass(frozen=True, slots=True)
+class ThreeCXExtension:
+    """Normalized 3CX V20 user/extension record."""
+
+    extension_id: str
+    number: str
+    first_name: str = ""
+    last_name: str = ""
+
+    @property
+    def name(self) -> str:
+        """Return the best available display name."""
+        full_name = " ".join(part for part in (self.first_name, self.last_name) if part).strip()
+        return full_name or self.number or f"Extension {self.extension_id}"
+
+
 @dataclass(slots=True)
 class ThreeCXSnapshot:
     """Normalized state returned to Home Assistant."""
@@ -32,6 +48,7 @@ class ThreeCXSnapshot:
     active_calls: int = 0
     api_mode: str = "v20"
     system_version: str | None = None
+    extension_records: tuple[ThreeCXExtension, ...] = ()
     raw: dict[str, Any] | None = None
 
 
@@ -117,7 +134,7 @@ class ThreeCXApiClient:
                 timeout=ClientTimeout(total=20),
             ) as response:
                 if response.status == 401:
-                    token = await self.async_authenticate(force=True)
+                    await self.async_authenticate(force=True)
                     return await self._async_get(path)
                 await self._raise_for_status(response)
                 payload = await response.json(content_type=None)
@@ -126,6 +143,27 @@ class ThreeCXApiClient:
             raise
         except (ClientError, TimeoutError, ValueError) as err:
             raise ThreeCXConnectionError(str(err)) from err
+
+    @staticmethod
+    def _normalize_extensions(values: list[Any]) -> tuple[ThreeCXExtension, ...]:
+        """Normalize V20 Users results and discard unusable records."""
+        records: list[ThreeCXExtension] = []
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            extension_id = str(item.get("Id", "")).strip()
+            number = str(item.get("Number", "")).strip()
+            if not extension_id:
+                continue
+            records.append(
+                ThreeCXExtension(
+                    extension_id=extension_id,
+                    number=number,
+                    first_name=str(item.get("FirstName", "") or "").strip(),
+                    last_name=str(item.get("LastName", "") or "").strip(),
+                )
+            )
+        return tuple(sorted(records, key=lambda record: (record.number, record.name)))
 
     async def async_test_connection(self) -> bool:
         """Authenticate and validate access using the official quick-test endpoint."""
@@ -137,6 +175,7 @@ class ThreeCXApiClient:
         defs, defs_response = await self._async_get(XAPI_DEFS_PATH)
         users, _ = await self._async_get(XAPI_USERS_PATH)
         user_values = users.get("value", []) if isinstance(users, dict) else []
+        extension_records = self._normalize_extensions(user_values)
         version = (
             defs_response.headers.get("X-3CX-Version")
             or defs_response.headers.get("3CX-Version")
@@ -144,10 +183,11 @@ class ThreeCXApiClient:
         )
         return ThreeCXSnapshot(
             connected=True,
-            extensions=len(user_values),
+            extensions=len(extension_records),
             active_calls=0,
             api_mode=self._api_mode,
             system_version=version,
+            extension_records=extension_records,
             raw={
                 "endpoint": self.base_url,
                 "defs_count": len(defs.get("value", [])) if isinstance(defs, dict) else 0,
