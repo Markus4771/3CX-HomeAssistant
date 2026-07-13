@@ -4,9 +4,15 @@ Private Home Assistant custom integration for connecting a 3CX V20 phone system 
 
 ## Project status
 
-Development version: **0.3.0**
+Current version: **0.3.0**
 
 The integration uses the official 3CX V20 Configuration API with client-credentials authentication. It creates a central PBX device and individual Home Assistant devices and sensor entities for all users/extensions returned by the V20 Users endpoint.
+
+## Installation
+
+The repository is prepared for installation through HACS as a custom repository and for manual installation using the generated `threecx.zip` release package.
+
+See [INSTALLATION.md](INSTALLATION.md) for the complete instructions.
 
 ## Current functions
 
@@ -20,6 +26,16 @@ The integration uses the official 3CX V20 Configuration API with client-credenti
 - Automatic discovery of newly created extensions
 - Removed extensions are marked unavailable
 - API mode display
+
+## Automated validation and releases
+
+GitHub Actions now performs these checks on pushes and pull requests:
+
+- Python syntax validation
+- JSON validation
+- consistency check between `version.txt` and `manifest.json`
+
+A tag matching the current version, for example `v0.3.0`, automatically creates a GitHub release containing `threecx.zip`. The release workflow can also be started manually to produce a downloadable workflow artifact without publishing a release.
 
 ## Not yet implemented
 
@@ -36,24 +52,6 @@ Live call information belongs to the separate 3CX Call Control API and is not si
 Create an API application in the 3CX administration interface under **Integrations → API** and enable Configuration API access. Save the generated client ID and API key securely.
 
 Use only the permissions required for reading users and extensions. Broader administrative permissions are not required for version 0.3.0.
-
-## Installation for development
-
-Copy `custom_components/threecx` to the Home Assistant configuration directory:
-
-```text
-/config/custom_components/threecx
-```
-
-Restart Home Assistant and add **3CX V20** under **Settings → Devices & services → Add integration**.
-
-Enter:
-
-- 3CX host name or IP address
-- HTTPS port
-- Client ID
-- API key
-- SSL verification setting
 
 ## Extension entities
 
