@@ -6,15 +6,19 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_PORT, CONF_USERNAME
+from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import ThreeCXApiClient, ThreeCXConnectionError
+from .api import (
+    ThreeCXApiClient,
+    ThreeCXAuthenticationError,
+    ThreeCXConnectionError,
+)
 from .const import (
-    API_MODE_AUTO,
-    API_MODE_LEGACY,
     API_MODE_V20,
     CONF_API_MODE,
+    CONF_CLIENT_ID,
+    CONF_CLIENT_SECRET,
     CONF_VERIFY_SSL,
     DEFAULT_PORT,
     DEFAULT_VERIFY_SSL,
@@ -23,9 +27,9 @@ from .const import (
 
 
 class ThreeCXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for 3CX."""
+    """Handle a config flow for 3CX V20."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -42,31 +46,31 @@ class ThreeCXConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 session=async_get_clientsession(self.hass),
                 host=host,
                 port=user_input[CONF_PORT],
-                username=user_input.get(CONF_USERNAME, ""),
-                password=user_input.get(CONF_PASSWORD, ""),
+                client_id=user_input[CONF_CLIENT_ID].strip(),
+                client_secret=user_input[CONF_CLIENT_SECRET],
                 verify_ssl=user_input[CONF_VERIFY_SSL],
-                api_mode=user_input[CONF_API_MODE],
+                api_mode=API_MODE_V20,
             )
             try:
                 await client.async_test_connection()
+            except ThreeCXAuthenticationError:
+                errors["base"] = "invalid_auth"
             except ThreeCXConnectionError:
                 errors["base"] = "cannot_connect"
-            except Exception:  # Home Assistant config flows must not crash on unknown errors.
+            except Exception:  # Config flows must not crash on unknown API errors.
                 errors["base"] = "unknown"
             else:
                 user_input[CONF_HOST] = host
-                return self.async_create_entry(title=f"3CX ({host})", data=user_input)
+                user_input[CONF_API_MODE] = API_MODE_V20
+                return self.async_create_entry(title=f"3CX V20 ({host})", data=user_input)
 
         schema = vol.Schema(
             {
                 vol.Required(CONF_HOST): str,
                 vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
-                vol.Optional(CONF_USERNAME, default=""): str,
-                vol.Optional(CONF_PASSWORD, default=""): str,
+                vol.Required(CONF_CLIENT_ID): str,
+                vol.Required(CONF_CLIENT_SECRET): str,
                 vol.Required(CONF_VERIFY_SSL, default=DEFAULT_VERIFY_SSL): bool,
-                vol.Required(CONF_API_MODE, default=API_MODE_AUTO): vol.In(
-                    [API_MODE_AUTO, API_MODE_V20, API_MODE_LEGACY]
-                ),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
