@@ -10,6 +10,10 @@
 - Removed extensions remain registered but become unavailable
 - Linked extension devices to the central 3CX PBX device
 - Normalized and sorted V20 `/xapi/v1/Users` results
+- Added HACS metadata for custom-repository installation
+- Added a complete installation and troubleshooting guide
+- Added GitHub Actions validation for Python syntax, JSON and version consistency
+- Added automated `threecx.zip` build and GitHub release workflow
 
 ## 0.2.0 – 2026-07-13
 
