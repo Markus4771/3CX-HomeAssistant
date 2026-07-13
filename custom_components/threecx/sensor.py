@@ -7,11 +7,11 @@ from typing import Callable
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import ThreeCXSnapshot
+from .api import ThreeCXExtension, ThreeCXSnapshot
 from .const import DOMAIN
 from .coordinator import ThreeCXDataUpdateCoordinator
 
@@ -52,15 +52,35 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up 3CX sensors."""
+    """Set up 3CX sensors and dynamically discover extensions."""
     coordinator: ThreeCXDataUpdateCoordinator = entry.runtime_data
     async_add_entities(
         ThreeCXSensor(coordinator, entry, description) for description in SENSORS
     )
 
+    known_extension_ids: set[str] = set()
+
+    @callback
+    def async_add_new_extensions() -> None:
+        new_records = [
+            record
+            for record in coordinator.data.extension_records
+            if record.extension_id not in known_extension_ids
+        ]
+        if not new_records:
+            return
+        known_extension_ids.update(record.extension_id for record in new_records)
+        async_add_entities(
+            ThreeCXExtensionSensor(coordinator, entry, record.extension_id)
+            for record in new_records
+        )
+
+    async_add_new_extensions()
+    entry.async_on_unload(coordinator.async_add_listener(async_add_new_extensions))
+
 
 class ThreeCXSensor(CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntity):
-    """Representation of a 3CX sensor."""
+    """Representation of a 3CX summary sensor."""
 
     entity_description: ThreeCXSensorDescription
     _attr_has_entity_name = True
@@ -73,10 +93,75 @@ class ThreeCXSensor(CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntit
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": entry.title,
             "manufacturer": "3CX",
-            "model": "Phone System",
+            "model": "Phone System V20",
         }
 
     @property
     def native_value(self) -> int | str:
         """Return the sensor value."""
         return self.entity_description.value_fn(self.coordinator.data)
+
+
+class ThreeCXExtensionSensor(
+    CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntity
+):
+    """Representation of one 3CX V20 extension."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:deskphone"
+
+    def __init__(
+        self,
+        coordinator: ThreeCXDataUpdateCoordinator,
+        entry: ConfigEntry,
+        extension_id: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._extension_id = extension_id
+        record = self._record
+        self._attr_unique_id = f"{entry.entry_id}_extension_{extension_id}"
+        self._attr_name = "Extension"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, f"{entry.entry_id}_extension_{extension_id}")},
+            "via_device": (DOMAIN, entry.entry_id),
+            "name": record.name if record else f"3CX extension {extension_id}",
+            "manufacturer": "3CX",
+            "model": "V20 Extension",
+        }
+
+    @property
+    def _record(self) -> ThreeCXExtension | None:
+        return next(
+            (
+                record
+                for record in self.coordinator.data.extension_records
+                if record.extension_id == self._extension_id
+            ),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return whether this extension still exists in 3CX."""
+        return super().available and self._record is not None
+
+    @property
+    def native_value(self) -> str | None:
+        """Use the extension number as the entity state."""
+        record = self._record
+        return record.number if record else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        """Expose stable 3CX identity and name fields."""
+        record = self._record
+        if record is None:
+            return {"3cx_id": self._extension_id}
+        return {
+            "3cx_id": record.extension_id,
+            "number": record.number,
+            "first_name": record.first_name,
+            "last_name": record.last_name,
+            "display_name": record.name,
+        }
