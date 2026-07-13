@@ -1,0 +1,53 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Validate Python syntax
+        run: python -m compileall -q custom_components/threecx
+
+      - name: Validate JSON files
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          files = [Path("hacs.json"), *Path("custom_components/threecx").rglob("*.json")]
+          for path in files:
+              with path.open(encoding="utf-8") as handle:
+                  json.load(handle)
+              print(f"OK: {path}")
+          PY
+
+      - name: Check version consistency
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          project_version = Path("version.txt").read_text(encoding="utf-8").strip()
+          manifest = json.loads(Path("custom_components/threecx/manifest.json").read_text(encoding="utf-8"))
+          manifest_version = manifest["version"]
+          if project_version != manifest_version:
+              raise SystemExit(
+                  f"Version mismatch: version.txt={project_version}, manifest.json={manifest_version}"
+              )
+          print(f"Version consistent: {project_version}")
+          PY
