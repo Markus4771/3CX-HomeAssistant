@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect 3CX",
+        "description": "Enter the address of the 3CX system. Version 0.1.0 first checks whether the web service is reachable.",
+        "data": {
+          "host": "Host or URL",
+          "port": "HTTPS port",
+          "username": "API username",
+          "password": "API password",
+          "verify_ssl": "Verify SSL certificate",
+          "api_mode": "API mode"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the 3CX system.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
+    },
+    "abort": {
+      "already_configured": "This 3CX system is already configured."
+    }
+  }
+}
