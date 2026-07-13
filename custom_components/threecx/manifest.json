@@ -1,0 +1,11 @@
+{
+  "domain": "threecx",
+  "name": "3CX",
+  "codeowners": ["@Markus4771"],
+  "config_flow": true,
+  "documentation": "https://github.com/Markus4771/3CX-HomeAssistant",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "0.1.0"
+}
