@@ -22,4 +22,6 @@ API_MODE_LEGACY = "legacy"
 TOKEN_PATH = "/connect/token"
 XAPI_BASE_PATH = "/xapi/v1"
 XAPI_DEFS_PATH = f"{XAPI_BASE_PATH}/Defs?$select=Id"
-XAPI_USERS_PATH = f"{XAPI_BASE_PATH}/Users?$select=Id,Number,FirstName,LastName"
+# Fetch complete user records. Status-related fields differ between V20 updates,
+# therefore they are detected dynamically instead of being restricted by $select.
+XAPI_USERS_PATH = f"{XAPI_BASE_PATH}/Users?$orderby=Number"
