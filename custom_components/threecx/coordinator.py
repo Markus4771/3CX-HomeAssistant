@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import ThreeCXApiClient, ThreeCXApiError, ThreeCXSnapshot
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .live_state import ThreeCXLiveState
+from .metadata_explorer import async_discover_queue_agent_metadata
 from .queue_agents import async_enrich_queue_agents
 
 _LOGGER = logging.getLogger(__name__)
@@ -138,6 +139,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.client = client
         self.call_control: Any | None = None
         self.queue_agent_diagnostics: dict[str, Any] = {}
+        self.odata_metadata: dict[str, Any] = {}
         self.live_state = ThreeCXLiveState()
         self.event_history: list[dict[str, Any]] = []
 
@@ -192,6 +194,11 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             snapshot, diagnostics = await async_enrich_queue_agents(
                 self.client, snapshot
             )
+            if not self.odata_metadata:
+                self.odata_metadata = await async_discover_queue_agent_metadata(
+                    self.client
+                )
+            diagnostics["_odata_metadata"] = self.odata_metadata
             self.queue_agent_diagnostics = diagnostics
             snapshot.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
                 snapshot.extension_records,
