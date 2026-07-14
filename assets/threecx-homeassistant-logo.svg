@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">3CX Home Assistant Integration</title>
+  <desc id="desc">Rounded square logo combining telephone and smart home symbols.</desc>
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#43c4ff"/>
+      <stop offset="1" stop-color="#0788d8"/>
+    </linearGradient>
+    <linearGradient id="dark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2c333d"/>
+      <stop offset="1" stop-color="#10151c"/>
+    </linearGradient>
+    <clipPath id="round"><rect x="20" y="20" width="472" height="472" rx="88"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <rect x="20" y="20" width="472" height="472" fill="url(#blue)"/>
+    <path d="M20 20h472v40c-44 108-118 187-222 240C172 351 92 415 20 492z" fill="url(#dark)"/>
+    <path d="M20 492c72-77 152-141 250-192 104-53 178-132 222-240" fill="none" stroke="#fff" stroke-width="10" opacity=".9"/>
+    <text x="60" y="170" font-family="Arial,Helvetica,sans-serif" font-size="112" font-weight="700" fill="#fff"><tspan fill="#14a9f5">3</tspan>CX</text>
+    <path d="M88 226c-20 25-20 56 0 87l58 70c14 17 39 20 57 7l34-26c10-8 12-23 4-33l-29-37c-8-10-23-12-33-4l-18 14c-15-18-27-35-37-53l17-14c10-8 12-23 4-33l-29-37c-8-10-23-12-33-4z" fill="#fff"/>
+    <path d="M348 258l92 72v120H270V330z" fill="#fff" opacity=".9"/>
+    <path d="M319 354v73m0-38-28-24m28 9 31-27m-31 62 37-31" fill="none" stroke="#0788d8" stroke-width="12" stroke-linecap="round"/>
+    <circle cx="291" cy="365" r="12" fill="#0788d8"/><circle cx="350" cy="347" r="12" fill="#0788d8"/><circle cx="356" cy="378" r="12" fill="#0788d8"/><circle cx="319" cy="354" r="12" fill="#0788d8"/>
+  </g>
+</svg>
