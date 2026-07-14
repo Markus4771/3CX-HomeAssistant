@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import replace
 import re
 from typing import Any
@@ -56,26 +57,9 @@ def _flatten(value: Any, prefix: str = "", depth: int = 0) -> dict[str, Any]:
     return result
 
 
-def _candidate_values(flat: dict[str, Any], keys: tuple[str, ...]) -> list[tuple[str, str]]:
-    """Return all matching scalar values, preferring specific nested paths."""
-    wanted = {_norm_key(key) for key in keys}
-    candidates: list[tuple[int, str, str]] = []
-    for path, value in flat.items():
-        if value in (None, ""):
-            continue
-        final = path.rsplit(".", 1)[-1].split("[", 1)[0]
-        if _norm_key(final) not in wanted:
-            continue
-        # Nested Agent/User/Queue objects are more specific than generic root fields.
-        lowered = path.casefold()
-        priority = 0
-        if any(part in lowered for part in ("agent.", "user.", "member.", "queue.")):
-            priority -= 10
-        if _norm_key(final) in {"name", "number", "status", "state"}:
-            priority += 5
-        candidates.append((priority, path, str(value).strip()))
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    return [(path, value) for _, path, value in candidates]
+def _path_matches(path: str, keys: tuple[str, ...]) -> bool:
+    final = path.rsplit(".", 1)[-1].split("[", 1)[0]
+    return _norm_key(final) in {_norm_key(key) for key in keys}
 
 
 def _as_bool(value: Any) -> bool | None:
@@ -99,19 +83,82 @@ def _as_bool(value: Any) -> bool | None:
     return None
 
 
-def _pick_login(flat: dict[str, Any]) -> tuple[bool | None, str | None, Any]:
-    for path, value in _candidate_values(flat, _LOGIN_KEYS):
-        parsed = _as_bool(value)
-        if parsed is not None:
-            return parsed, path, value
-    return None, None, None
+def _learn_alias_path(
+    flattened_rows: list[dict[str, Any]],
+    keys: tuple[str, ...],
+    aliases: dict[str, str],
+) -> tuple[str | None, dict[str, int]]:
+    """Score candidate paths by how often their values resolve to known aliases."""
+    scores: Counter[str] = Counter()
+    for flat in flattened_rows:
+        for path, value in flat.items():
+            if value in (None, "") or not _path_matches(path, keys):
+                continue
+            if _norm_value(value) in aliases:
+                scores[path] += 1
+    if not scores:
+        return None, {}
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return ranked[0][0], dict(ranked[:10])
 
 
-def _resolve(candidates: list[tuple[str, str]], aliases: dict[str, str]) -> tuple[str | None, str | None]:
-    for path, raw in candidates:
-        resolved = aliases.get(_norm_value(raw))
+def _learn_login_path(
+    flattened_rows: list[dict[str, Any]],
+) -> tuple[str | None, dict[str, int]]:
+    """Score paths by the number of values that can safely become booleans."""
+    scores: Counter[str] = Counter()
+    for flat in flattened_rows:
+        for path, value in flat.items():
+            if not _path_matches(path, _LOGIN_KEYS):
+                continue
+            if _as_bool(value) is not None:
+                scores[path] += 1
+    if not scores:
+        return None, {}
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    return ranked[0][0], dict(ranked[:10])
+
+
+def _resolve_path(
+    flat: dict[str, Any], path: str | None, aliases: dict[str, str]
+) -> str | None:
+    if not path or path not in flat:
+        return None
+    return aliases.get(_norm_value(flat[path]))
+
+
+def _resolve_fallback(
+    flat: dict[str, Any], keys: tuple[str, ...], aliases: dict[str, str]
+) -> tuple[str | None, str | None]:
+    """Resolve from all candidate paths when the learned path is absent in a row."""
+    candidates: list[tuple[int, str, Any]] = []
+    for path, value in flat.items():
+        if value in (None, "") or not _path_matches(path, keys):
+            continue
+        lowered = path.casefold()
+        priority = -10 if any(
+            part in lowered for part in ("agent.", "user.", "member.", "queue.")
+        ) else 0
+        candidates.append((priority, path, value))
+    for _, path, value in sorted(candidates, key=lambda item: (item[0], item[1])):
+        resolved = aliases.get(_norm_value(value))
         if resolved:
             return resolved, path
+    return None, None
+
+
+def _login_from_path(flat: dict[str, Any], path: str | None) -> bool | None:
+    if not path or path not in flat:
+        return None
+    return _as_bool(flat[path])
+
+
+def _login_fallback(flat: dict[str, Any]) -> tuple[bool | None, str | None]:
+    for path, value in sorted(flat.items()):
+        if _path_matches(path, _LOGIN_KEYS):
+            parsed = _as_bool(value)
+            if parsed is not None:
+                return parsed, path
     return None, None
 
 
@@ -120,7 +167,7 @@ async def async_apply_entity_set_status(
     snapshot: ThreeCXSnapshot,
     metadata: dict[str, Any],
 ) -> tuple[ThreeCXSnapshot, dict[str, Any]]:
-    """Read discovered sets and merge only unambiguous queue login states."""
+    """Learn field paths and merge only unambiguous queue login states."""
     probes = metadata.get("entity_set_probes", {})
     if not isinstance(probes, dict):
         return snapshot, {"available": False, "reason": "Keine Entity-Set-Probes"}
@@ -162,10 +209,19 @@ async def async_apply_entity_set_status(
             results[name] = {"used": False, "error": str(err)[:500]}
             continue
 
+        flattened_rows = [_flatten(row) for row in rows if isinstance(row, dict)]
+        agent_path, agent_scores = _learn_alias_path(
+            flattened_rows, _AGENT_KEYS, extension_aliases
+        )
+        queue_path, queue_scores = _learn_alias_path(
+            flattened_rows, _QUEUE_KEYS, queue_aliases
+        )
+        login_path, login_scores = _learn_login_path(flattened_rows)
+
         set_matched = set_logged = 0
-        login_fields: set[str] = set()
-        agent_fields: set[str] = set()
-        queue_fields: set[str] = set()
+        used_agent_fields: set[str] = set()
+        used_queue_fields: set[str] = set()
+        used_login_fields: set[str] = set()
         unmatched = {
             "agent_not_found": 0,
             "queue_not_found": 0,
@@ -173,23 +229,33 @@ async def async_apply_entity_set_status(
             "multiple_missing": 0,
         }
 
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
+        for flat in flattened_rows:
             total_rows += 1
-            flat = _flatten(row)
-            agent_candidates = _candidate_values(flat, _AGENT_KEYS)
-            queue_candidates = _candidate_values(flat, _QUEUE_KEYS)
-            agent, agent_path = _resolve(agent_candidates, extension_aliases)
-            queue_id, queue_path = _resolve(queue_candidates, queue_aliases)
-            login, login_path, _ = _pick_login(flat)
+            agent = _resolve_path(flat, agent_path, extension_aliases)
+            used_agent_path = agent_path if agent else None
+            if not agent:
+                agent, used_agent_path = _resolve_fallback(
+                    flat, _AGENT_KEYS, extension_aliases
+                )
 
-            if agent_path:
-                agent_fields.add(agent_path)
-            if queue_path:
-                queue_fields.add(queue_path)
-            if login_path:
-                login_fields.add(login_path)
+            queue_id = _resolve_path(flat, queue_path, queue_aliases)
+            used_queue_path = queue_path if queue_id else None
+            if not queue_id:
+                queue_id, used_queue_path = _resolve_fallback(
+                    flat, _QUEUE_KEYS, queue_aliases
+                )
+
+            login = _login_from_path(flat, login_path)
+            used_login_path = login_path if login is not None else None
+            if login is None:
+                login, used_login_path = _login_fallback(flat)
+
+            if used_agent_path:
+                used_agent_fields.add(used_agent_path)
+            if used_queue_path:
+                used_queue_fields.add(used_queue_path)
+            if used_login_path:
+                used_login_fields.add(used_login_path)
 
             missing = sum((not agent, not queue_id, login is None))
             if missing:
@@ -212,15 +278,29 @@ async def async_apply_entity_set_status(
             else:
                 logged_by_queue[queue_id].discard(agent)
 
+        confidence = {
+            "agent": (agent_scores.get(agent_path, 0) if agent_path else 0),
+            "queue": (queue_scores.get(queue_path, 0) if queue_path else 0),
+            "login": (login_scores.get(login_path, 0) if login_path else 0),
+        }
         results[name] = {
             "used": bool(rows),
             "pages": pages,
             "rows": len(rows),
             "matched_rows": set_matched,
             "logged_in_rows": set_logged,
-            "agent_fields": sorted(agent_fields),
-            "queue_fields": sorted(queue_fields),
-            "login_fields": sorted(login_fields),
+            "learned_paths": {
+                "agent": agent_path,
+                "queue": queue_path,
+                "login": login_path,
+            },
+            "path_confidence_hits": confidence,
+            "agent_path_scores": agent_scores,
+            "queue_path_scores": queue_scores,
+            "login_path_scores": login_scores,
+            "agent_fields": sorted(used_agent_fields),
+            "queue_fields": sorted(used_queue_fields),
+            "login_fields": sorted(used_login_fields),
             "unmatched_reasons": unmatched,
             "known_agent_aliases": len(extension_aliases),
             "known_queue_aliases": len(queue_aliases),
