@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 from xml.etree import ElementTree
@@ -32,20 +33,73 @@ def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+def _flatten(value: Any, prefix: str = "", depth: int = 0) -> dict[str, Any]:
+    """Flatten a small response row for field-path diagnostics."""
+    if depth > 6:
+        return {}
+    result: dict[str, Any] = {}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(child, (dict, list)):
+                result.update(_flatten(child, path, depth + 1))
+            else:
+                result[path] = child
+    elif isinstance(value, list):
+        for index, child in enumerate(value[:20]):
+            result.update(_flatten(child, f"{prefix}[{index}]", depth + 1))
+    return result
+
+
 def _interesting_fields(values: list[Any]) -> tuple[list[str], list[str]]:
-    """Return all and status-related field names without exposing record values."""
+    """Return all and status-related field paths without exposing record values."""
     fields: set[str] = set()
     status_fields: set[str] = set()
     for value in values[:5]:
         if not isinstance(value, dict):
             continue
-        for key in value:
-            name = str(key)
-            fields.add(name)
-            normalized = name.lower().replace("_", "").replace("-", "")
+        for path in _flatten(value):
+            fields.add(path)
+            normalized = path.lower().replace("_", "").replace("-", "")
             if any(part in normalized for part in _STATUS_PARTS):
-                status_fields.add(name)
+                status_fields.add(path)
     return sorted(fields), sorted(status_fields)
+
+
+def _fingerprint(value: Any) -> str | None:
+    """Create a stable, non-reversible short fingerprint for diagnostic matching."""
+    if value in (None, ""):
+        return None
+    text = str(value).strip().casefold()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _anonymized_samples(values: list[Any]) -> list[dict[str, Any]]:
+    """Return field paths and fingerprints for up to five rows, never raw identities."""
+    samples: list[dict[str, Any]] = []
+    for index, value in enumerate(values[:5]):
+        if not isinstance(value, dict):
+            continue
+        flat = _flatten(value)
+        interesting: dict[str, Any] = {}
+        for path, raw in flat.items():
+            normalized = path.lower().replace("_", "").replace("-", "")
+            if not any(part in normalized for part in _STATUS_PARTS):
+                continue
+            final = path.rsplit(".", 1)[-1].split("[", 1)[0].lower()
+            is_status_value = any(
+                part in final
+                for part in ("status", "state", "login", "logged", "active", "available", "pause", "wrap")
+            )
+            interesting[path] = raw if is_status_value and isinstance(raw, (bool, int, float)) else _fingerprint(raw)
+        samples.append(
+            {
+                "row": index + 1,
+                "field_count": len(flat),
+                "candidate_fields": interesting,
+            }
+        )
+    return samples
 
 
 async def _async_probe_entity_sets(
@@ -74,6 +128,8 @@ async def _async_probe_entity_sets(
                 "sample_count": len(values),
                 "field_names": fields,
                 "status_field_names": status_fields,
+                "anonymized_samples": _anonymized_samples(values),
+                "privacy_note": "Identitaeten werden nur als SHA-256-Kurzfingerabdruck ausgegeben.",
             }
         except Exception as err:  # Probe failures must never break the integration.
             probes[name] = {
@@ -119,7 +175,7 @@ async def async_discover_queue_agent_metadata(client: Any) -> dict[str, Any]:
     try:
         root = ElementTree.fromstring(text)
     except ElementTree.ParseError as err:
-        result["error"] = f"Metadata XML ungültig: {err}"
+        result["error"] = f"Metadata XML ungueltig: {err}"
         return result
 
     entity_sets: set[str] = set()
