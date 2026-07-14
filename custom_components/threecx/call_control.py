@@ -43,6 +43,10 @@ class CallControlState:
     direction: str | None = None
     last_event: dict[str, Any] = field(default_factory=dict)
     recent_events: list[dict[str, Any]] = field(default_factory=list)
+    candidate_paths: list[str] = field(default_factory=list)
+    endpoint_results: dict[str, dict[str, Any]] = field(default_factory=dict)
+    connection_attempts: int = 0
+    last_attempt_at: str | None = None
 
 
 def _normalized_key(value: str) -> str:
@@ -141,7 +145,7 @@ class ThreeCXCallControlClient:
         self._event_callback = event_callback
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
-        self.state = CallControlState()
+        self.state = CallControlState(candidate_paths=list(candidate_paths))
 
     def start(self) -> None:
         """Start the connection loop once."""
@@ -186,13 +190,29 @@ class ThreeCXCallControlClient:
         token = await self._token_provider()
         errors: list[str] = []
         for path in self._candidate_paths:
+            attempted_at = datetime.now(timezone.utc).isoformat()
+            self.state.connection_attempts += 1
+            self.state.last_attempt_at = attempted_at
             try:
                 websocket = await self._connect_candidate(path, token)
                 self.state.endpoint = path
                 self.state.last_error = None
+                self.state.endpoint_results[path] = {
+                    "success": True,
+                    "attempted_at": attempted_at,
+                    "url": self._websocket_url(path),
+                    "error": None,
+                }
                 return websocket
             except (ClientError, asyncio.TimeoutError, ValueError) as err:
-                errors.append(f"{path}: {err}")
+                error_text = str(err)[:500]
+                errors.append(f"{path}: {error_text}")
+                self.state.endpoint_results[path] = {
+                    "success": False,
+                    "attempted_at": attempted_at,
+                    "url": self._websocket_url(path),
+                    "error": error_text,
+                }
         raise ConnectionError("; ".join(errors) or "No Call Control endpoint configured")
 
     async def _handle_message(self, text: str) -> None:
