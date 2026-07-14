@@ -83,7 +83,7 @@ class ThreeCXConnectionBinarySensor(
 class ThreeCXCallControlBinarySensor(
     CoordinatorEntity[ThreeCXDataUpdateCoordinator], BinarySensorEntity
 ):
-    """Show the experimental Call Control websocket connection state."""
+    """Show the Call Control websocket connection and event diagnostics."""
 
     _attr_has_entity_name = True
     _attr_name = "Call Control verbunden"
@@ -116,7 +116,13 @@ class ThreeCXCallControlBinarySensor(
             "events_received": state.events_received,
             "reconnects": state.reconnects,
             "last_event_type": state.last_event_type,
+            "normalized_state": state.normalized_state,
             "last_event_at": state.last_event_at,
+            "call_id": state.call_id,
+            "source": state.source,
+            "destination": state.destination,
+            "direction": state.direction,
+            "recent_events": list(state.recent_events),
             "last_event": state.last_event,
         }
 
