@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0 – 2026-07-14
+
+- Added one separate status sensor for every 3CX V20 user
+- Changed the Users request to retrieve complete user records instead of a fixed field selection
+- Added dynamic detection of all status, presence, profile, DND, routing, availability and registration fields returned by the installed V20 build
+- Added a prioritized main status while retaining every other supplied status field as entity attributes
+- Kept extension-number sensors unchanged for compatibility
+- Live ringing, connected-call and call-ended states remain reserved for the separate Call Control API
+
+## 0.3.1 – 2026-07-14
+
+- Added OData pagination so all API-visible users are loaded
+- Added loop and page-limit protection for pagination
+
 ## 0.3.0 – 2026-07-13
 
 - Added one Home Assistant device for every 3CX V20 user/extension
