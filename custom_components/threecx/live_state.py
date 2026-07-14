@@ -124,6 +124,23 @@ class ThreeCXLiveState:
         else:
             logged.discard(extension)
 
+    def _purge_stale_queue_decisions(self, now: datetime) -> int:
+        """Remove expired queue overrides and return the number removed."""
+        removed = 0
+        for queue in list(self.queue_decisions):
+            decisions = self.queue_decisions[queue]
+            for extension in list(decisions):
+                if decisions[extension].is_fresh(now):
+                    continue
+                decisions.pop(extension, None)
+                self.queue_logins.get(queue, set()).discard(extension)
+                removed += 1
+            if not decisions:
+                self.queue_decisions.pop(queue, None)
+            if queue in self.queue_logins and not self.queue_logins[queue]:
+                self.queue_logins.pop(queue, None)
+        return removed
+
     def ingest(self, payload: dict[str, Any], normalized: dict[str, Any]) -> bool:
         """Apply one normalized event when it can be mapped safely."""
         flat = _flatten(payload)
@@ -151,7 +168,6 @@ class ThreeCXLiveState:
                 elif state == "queue_logout":
                     self._set_queue_decision(queue, extension, False, state, now)
                 else:
-                    # Pause and wrap-up preserve login membership but keep the live state.
                     currently_logged = extension in self.queue_logins.get(queue, set())
                     self._set_queue_decision(queue, extension, currently_logged, state, now)
             applied = True
@@ -192,30 +208,20 @@ class ThreeCXLiveState:
 
     def apply_to_snapshot(self, snapshot: ThreeCXSnapshot) -> ThreeCXSnapshot:
         """Merge polling and realtime data using fresh Call Control decisions first."""
-        updated_extensions = []
-        for record in snapshot.extension_records:
-            live = self.extensions.get(record.number) or self.extensions.get(record.extension_id)
-            if live is None:
-                updated_extensions.append(record)
-                continue
-            status = dict(record.status_fields)
-            status.update({
-                "live_phone_state": live.phone_state,
-                "live_queue_state": live.queue_state,
-                "live_call_id": live.call_id,
-                "live_peer": live.peer,
-                "live_direction": live.direction,
-                "live_updated_at": live.updated_at,
-            })
-            updated_extensions.append(replace(record, status_fields=tuple(sorted(status.items()))))
-
         now = datetime.now(timezone.utc)
+        stale_removed = self._purge_stale_queue_decisions(now)
+
         updated_queues = []
         for queue_record in snapshot.queue_records:
             live_members = set(queue_record.logged_in_members)
             applied_decisions = 0
             newest_update: str | None = None
-            for key in (queue_record.queue_id, queue_record.number, queue_record.display_name):
+            for key in (
+                queue_record.queue_id,
+                queue_record.number,
+                queue_record.display_name,
+                queue_record.name,
+            ):
                 for extension, decision in self.queue_decisions.get(key, {}).items():
                     if not decision.is_fresh(now):
                         continue
@@ -236,11 +242,43 @@ class ThreeCXLiveState:
                 "live_decisions_applied": applied_decisions,
                 "live_last_updated_at": newest_update,
                 "live_override_ttl_seconds": int(_QUEUE_OVERRIDE_TTL.total_seconds()),
+                "stale_live_decisions_removed": stale_removed,
             })
             updated_queues.append(replace(
                 queue_record,
                 logged_in_members=tuple(sorted(live_members)),
                 raw_fields=tuple(sorted(raw.items())),
+            ))
+
+        queue_names_by_identity: dict[str, set[str]] = {}
+        for queue in updated_queues:
+            for identity in queue.logged_in_members:
+                queue_names_by_identity.setdefault(str(identity), set()).add(queue.display_name)
+
+        updated_extensions = []
+        for record in snapshot.extension_records:
+            identities = {record.extension_id, record.number}
+            identities.discard("")
+            logged_in_names: set[str] = set()
+            for identity in identities:
+                logged_in_names.update(queue_names_by_identity.get(identity, set()))
+
+            live = self.extensions.get(record.number) or self.extensions.get(record.extension_id)
+            status = dict(record.status_fields)
+            if live is not None:
+                status.update({
+                    "live_phone_state": live.phone_state,
+                    "live_queue_state": live.queue_state,
+                    "live_call_id": live.call_id,
+                    "live_peer": live.peer,
+                    "live_direction": live.direction,
+                    "live_updated_at": live.updated_at,
+                })
+
+            updated_extensions.append(replace(
+                record,
+                queue_logged_in_names=tuple(sorted(logged_in_names)),
+                status_fields=tuple(sorted(status.items())),
             ))
 
         snapshot.extension_records = tuple(updated_extensions)
