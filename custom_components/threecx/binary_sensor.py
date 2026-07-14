@@ -83,7 +83,7 @@ class ThreeCXConnectionBinarySensor(
 class ThreeCXCallControlBinarySensor(
     CoordinatorEntity[ThreeCXDataUpdateCoordinator], BinarySensorEntity
 ):
-    """Show the Call Control websocket connection and event diagnostics."""
+    """Show Call Control and queue-agent diagnostics."""
 
     _attr_has_entity_name = True
     _attr_name = "Call Control verbunden"
@@ -107,24 +107,31 @@ class ThreeCXCallControlBinarySensor(
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         client = self.coordinator.call_control
-        if client is None:
-            return {"status": "nicht gestartet"}
-        state = client.state
-        return {
-            "endpoint": state.endpoint,
-            "last_error": state.last_error,
-            "events_received": state.events_received,
-            "reconnects": state.reconnects,
-            "last_event_type": state.last_event_type,
-            "normalized_state": state.normalized_state,
-            "last_event_at": state.last_event_at,
-            "call_id": state.call_id,
-            "source": state.source,
-            "destination": state.destination,
-            "direction": state.direction,
-            "recent_events": list(state.recent_events),
-            "last_event": state.last_event,
+        attributes: dict[str, object] = {
+            "queue_agent_diagnostics": self.coordinator.queue_agent_diagnostics,
         }
+        if client is None:
+            attributes["status"] = "nicht gestartet"
+            return attributes
+        state = client.state
+        attributes.update(
+            {
+                "endpoint": state.endpoint,
+                "last_error": state.last_error,
+                "events_received": state.events_received,
+                "reconnects": state.reconnects,
+                "last_event_type": state.last_event_type,
+                "normalized_state": state.normalized_state,
+                "last_event_at": state.last_event_at,
+                "call_id": state.call_id,
+                "source": state.source,
+                "destination": state.destination,
+                "direction": state.direction,
+                "recent_events": list(state.recent_events),
+                "last_event": state.last_event,
+            }
+        )
+        return attributes
 
 
 class ThreeCXExtensionBinarySensor(
