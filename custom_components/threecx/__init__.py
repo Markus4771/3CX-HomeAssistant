@@ -32,7 +32,6 @@ type ThreeCXConfigEntry = ConfigEntry[ThreeCXDataUpdateCoordinator]
 
 
 def _safe_event_name(value: Any) -> str:
-    """Create a stable Home Assistant event suffix from a 3CX event type."""
     normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "unknown").lower()).strip("_")
     return normalized[:80] or "unknown"
 
@@ -55,16 +54,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> b
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def async_handle_call_control(payload: dict[str, Any]) -> None:
-        """Forward raw and normalized Call Control frames to Home Assistant."""
+        """Apply and forward raw and normalized Call Control frames."""
         normalized = payload.get("_threecx_normalized", {})
         if not isinstance(normalized, dict):
             normalized = {}
         raw_type = normalized.get("raw_type", "unknown")
         normalized_state = normalized.get("normalized_state", "unknown")
+        applied = coordinator.ingest_live_event(payload, normalized)
         event_data = {
             "config_entry_id": entry.entry_id,
             "event_type": str(raw_type),
             "normalized_state": str(normalized_state),
+            "applied_to_live_state": applied,
             "call_id": normalized.get("call_id"),
             "source": normalized.get("source"),
             "destination": normalized.get("destination"),
@@ -76,7 +77,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> b
             f"{DOMAIN}_{_safe_event_name(normalized_state)}",
             event_data,
         )
-        coordinator.async_update_listeners()
 
     call_control = ThreeCXCallControlClient(
         session=session,
