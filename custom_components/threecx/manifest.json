@@ -5,7 +5,7 @@
   "config_flow": true,
   "documentation": "https://github.com/Markus4771/3CX-HomeAssistant",
   "integration_type": "hub",
-  "iot_class": "local_polling",
+  "iot_class": "local_push",
   "requirements": [],
-  "version": "0.7.2"
+  "version": "0.8.0"
 }
