@@ -20,7 +20,12 @@ async def async_setup_entry(
 ) -> None:
     """Set up connection and extension binary sensors."""
     coordinator: ThreeCXDataUpdateCoordinator = entry.runtime_data
-    async_add_entities([ThreeCXConnectionBinarySensor(coordinator, entry)])
+    async_add_entities(
+        [
+            ThreeCXConnectionBinarySensor(coordinator, entry),
+            ThreeCXCallControlBinarySensor(coordinator, entry),
+        ]
+    )
 
     known_extension_ids: set[str] = set()
 
@@ -73,6 +78,47 @@ class ThreeCXConnectionBinarySensor(
     @property
     def is_on(self) -> bool:
         return self.coordinator.data.connected
+
+
+class ThreeCXCallControlBinarySensor(
+    CoordinatorEntity[ThreeCXDataUpdateCoordinator], BinarySensorEntity
+):
+    """Show the experimental Call Control websocket connection state."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Call Control verbunden"
+    _attr_icon = "mdi:phone-sync"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_call_control_connected"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": entry.title,
+            "manufacturer": "3CX",
+            "model": "Phone System V20",
+        }
+
+    @property
+    def is_on(self) -> bool:
+        client = self.coordinator.call_control
+        return bool(client and client.state.connected)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        client = self.coordinator.call_control
+        if client is None:
+            return {"status": "nicht gestartet"}
+        state = client.state
+        return {
+            "endpoint": state.endpoint,
+            "last_error": state.last_error,
+            "events_received": state.events_received,
+            "reconnects": state.reconnects,
+            "last_event_type": state.last_event_type,
+            "last_event_at": state.last_event_at,
+            "last_event": state.last_event,
+        }
 
 
 class ThreeCXExtensionBinarySensor(
