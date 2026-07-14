@@ -24,6 +24,30 @@ class ThreeCXConnectionError(ThreeCXApiError):
     """Raised when the PBX cannot be reached."""
 
 
+_STATUS_KEY_PARTS = (
+    "status",
+    "presence",
+    "profile",
+    "dnd",
+    "donotdisturb",
+    "route",
+    "available",
+    "away",
+    "registered",
+    "officehours",
+)
+
+_STATUS_PRIORITY = (
+    "CurrentProfile",
+    "PresenceStatus",
+    "CurrentStatus",
+    "UserStatus",
+    "RouteStatus",
+    "Status",
+    "Profile",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ThreeCXExtension:
     """Normalized 3CX V20 user/extension record."""
@@ -32,12 +56,19 @@ class ThreeCXExtension:
     number: str
     first_name: str = ""
     last_name: str = ""
+    presence_status: str = "unknown"
+    status_fields: tuple[tuple[str, Any], ...] = ()
 
     @property
     def name(self) -> str:
         """Return the best available display name."""
         full_name = " ".join(part for part in (self.first_name, self.last_name) if part).strip()
         return full_name or self.number or f"Extension {self.extension_id}"
+
+    @property
+    def status_attributes(self) -> dict[str, Any]:
+        """Return all status-related fields as Home Assistant attributes."""
+        return dict(self.status_fields)
 
 
 @dataclass(slots=True)
@@ -183,8 +214,41 @@ class ThreeCXApiClient:
         return values
 
     @staticmethod
-    def _normalize_extensions(values: list[Any]) -> tuple[ThreeCXExtension, ...]:
-        """Normalize V20 Users results and discard unusable records."""
+    def _status_fields(item: dict[str, Any]) -> dict[str, Any]:
+        """Collect every simple status-related field returned by this V20 build."""
+        fields: dict[str, Any] = {}
+        for key, value in item.items():
+            normalized_key = key.lower().replace("_", "").replace("-", "")
+            if not any(part in normalized_key for part in _STATUS_KEY_PARTS):
+                continue
+            if value is None or isinstance(value, (str, int, float, bool)):
+                fields[key] = value
+        return fields
+
+    @staticmethod
+    def _primary_status(item: dict[str, Any], fields: dict[str, Any]) -> str:
+        """Choose the best status value while preserving all other fields."""
+        for key in _STATUS_PRIORITY:
+            value = item.get(key)
+            if value not in (None, ""):
+                return str(value)
+
+        for key, value in fields.items():
+            if value not in (None, "") and not isinstance(value, bool):
+                return str(value)
+
+        for key, value in fields.items():
+            normalized_key = key.lower().replace("_", "").replace("-", "")
+            if isinstance(value, bool) and value and (
+                "dnd" in normalized_key or "donotdisturb" in normalized_key
+            ):
+                return "DND"
+
+        return "unknown"
+
+    @classmethod
+    def _normalize_extensions(cls, values: list[Any]) -> tuple[ThreeCXExtension, ...]:
+        """Normalize V20 Users results and preserve all supplied status fields."""
         records: list[ThreeCXExtension] = []
         for item in values:
             if not isinstance(item, dict):
@@ -193,12 +257,15 @@ class ThreeCXApiClient:
             number = str(item.get("Number", "")).strip()
             if not extension_id:
                 continue
+            status_fields = cls._status_fields(item)
             records.append(
                 ThreeCXExtension(
                     extension_id=extension_id,
                     number=number,
                     first_name=str(item.get("FirstName", "") or "").strip(),
                     last_name=str(item.get("LastName", "") or "").strip(),
+                    presence_status=cls._primary_status(item, status_fields),
+                    status_fields=tuple(sorted(status_fields.items())),
                 )
             )
         return tuple(sorted(records, key=lambda record: (record.number, record.name)))
