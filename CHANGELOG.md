@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.2 – 2026-07-14
+
+- Added a dedicated `Call Control Event Monitor` entity
+- Stores up to 200 compact Call Control events in memory
+- Exposes the latest 50 events in Home Assistant for practical diagnostics
+- Records whether each event was applied or ignored
+- Records normalized state, extension, queue, call ID, source, destination and returned field names
+- Added applied and ignored event counters to simplify mapping unknown 3CX V20 event formats
+- Keeps full queue-agent diagnostics and live-state diagnostics available on the central device
+
 ## 0.9.0 – 2026-07-14
 
 - Added a structured in-memory live-state store for Call Control events
