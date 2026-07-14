@@ -6,6 +6,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: threecx-release
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -16,26 +20,43 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Read and validate version
+      - name: Read and validate version and domain
         id: version
         shell: bash
         run: |
           VERSION="$(tr -d '\r\n ' < version.txt)"
           MANIFEST_VERSION="$(python -c 'import json; print(json.load(open("custom_components/threecx/manifest.json", encoding="utf-8"))["version"])')"
+          MANIFEST_DOMAIN="$(python -c 'import json; print(json.load(open("custom_components/threecx/manifest.json", encoding="utf-8"))["domain"])')"
+          HACS_DOMAIN="$(python -c 'import json; print(json.load(open("hacs.json", encoding="utf-8"))["domains"][0])')"
           if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
             echo "version.txt and manifest.json do not match" >&2
+            exit 1
+          fi
+          if [ "$MANIFEST_DOMAIN" != "threecx" ] || [ "$HACS_DOMAIN" != "threecx" ]; then
+            echo "HACS or manifest domain is not threecx" >&2
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Validate Python and JSON
+        shell: bash
+        run: |
+          python -m compileall -q custom_components/threecx
+          python -m json.tool custom_components/threecx/manifest.json >/dev/null
+          python -m json.tool hacs.json >/dev/null
+
       - name: Build HACS release ZIP
         shell: bash
         run: |
+          rm -rf dist
           mkdir -p dist
           cd custom_components/threecx
           zip -r "../../dist/threecx.zip" . -x "*/__pycache__/*" "*.pyc"
-          test -f "../../dist/threecx.zip"
+          cd ../..
+          test -f dist/threecx.zip
+          unzip -l dist/threecx.zip | grep -E '(^|[[:space:]])manifest.json$'
+          unzip -p dist/threecx.zip manifest.json | python -c 'import json,sys; data=json.load(sys.stdin); assert data["domain"] == "threecx"'
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
