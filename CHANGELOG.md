@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.4 – 2026-07-14
+
+- Changed the V20 Users request to include `$count=true`
+- Requests up to 1000 user records in one response with `$top=1000`
+- Keeps OData next-link pagination as a fallback
+- Works around V20 responses that return a shortened first collection without a usable continuation link
+- Keeps complete user records so dynamic presence and status detection continues to work
+
 ## 0.4.3 – 2026-07-14
 
 - Added a user-import diagnostic sensor on the central 3CX device
