@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 – 2026-07-14
+
+- Fixed HACS domain detection by declaring the `threecx` integration domain explicitly
+- Enabled installation from the generated `threecx.zip` release asset
+- Fixed the HACS error `custom_components/None/manifest.json`
+
 ## 0.4.0 – 2026-07-14
 
 - Added one separate status sensor for every 3CX V20 user
