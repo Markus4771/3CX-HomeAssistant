@@ -2,7 +2,5 @@
   "name": "3CX Home Assistant",
   "content_in_root": false,
   "render_readme": true,
-  "domains": ["threecx"],
-  "zip_release": true,
-  "filename": "threecx.zip"
+  "domains": ["threecx"]
 }
