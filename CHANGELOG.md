@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.8.1 – 2026-07-14
+
+- Added tolerant normalization of unknown Call Control event structures
+- Maps common event values to `ringing`, `dialing`, `connected`, `held`, `transferred`, `ended`, `queue_login` and `queue_logout`
+- Extracts call ID, source, destination and direction from nested event objects
+- Stores the 20 most recent normalized events for diagnostics
+- Extended the `Call Control verbunden` entity with normalized event details
+- Home Assistant now fires normalized events such as `threecx_ringing` and `threecx_connected`
+
+## 0.8.0 – 2026-07-14
+
+- Added an isolated Call Control websocket client
+- Added bearer-token authentication, heartbeat and automatic reconnection
+- Added non-fatal endpoint discovery for multiple local Call Control paths
+- Added `Call Control verbunden` binary sensor and raw event diagnostics
+- Added generic `threecx_call_control_event` events on the Home Assistant event bus
+- Configuration API polling remains operational if Call Control is unavailable
+
+## 0.7.2 – 2026-07-14
+
+- Added user-level queue-login field detection as fallback
+- Supports multiple queue and agent login field-name variants
+- Queue login detection no longer depends solely on Queue Agent records
+
+## 0.7.1 – 2026-07-14
+
+- Expanded queue agents together with their nested User object
+- Improved matching between queue members and 3CX extensions
+
+## 0.7.0 – 2026-07-14
+
+- Added multi-source user import from Users and Groups/Departments
+- Added role-independent merging by 3CX ID and extension number
+- Added role, department, email, mobile, active state and import source metadata
+- Added fallback support for users omitted from the primary Users collection
+
 ## 0.6.1 – 2026-07-14
 
 - Fixed queues showing `0/0 angemeldet` although agents were configured
