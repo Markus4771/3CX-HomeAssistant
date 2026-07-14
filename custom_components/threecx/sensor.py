@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -70,10 +70,15 @@ async def async_setup_entry(
         if not new_records:
             return
         known_extension_ids.update(record.extension_id for record in new_records)
-        async_add_entities(
-            ThreeCXExtensionSensor(coordinator, entry, record.extension_id)
-            for record in new_records
-        )
+        entities: list[SensorEntity] = []
+        for record in new_records:
+            entities.extend(
+                (
+                    ThreeCXExtensionSensor(coordinator, entry, record.extension_id),
+                    ThreeCXStatusSensor(coordinator, entry, record.extension_id),
+                )
+            )
+        async_add_entities(entities)
 
     async_add_new_extensions()
     entry.async_on_unload(coordinator.async_add_listener(async_add_new_extensions))
@@ -102,13 +107,10 @@ class ThreeCXSensor(CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntit
         return self.entity_description.value_fn(self.coordinator.data)
 
 
-class ThreeCXExtensionSensor(
-    CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntity
-):
-    """Representation of one 3CX V20 extension."""
+class ThreeCXExtensionEntity(CoordinatorEntity[ThreeCXDataUpdateCoordinator]):
+    """Common base for entities belonging to one V20 extension."""
 
     _attr_has_entity_name = True
-    _attr_icon = "mdi:deskphone"
 
     def __init__(
         self,
@@ -120,8 +122,6 @@ class ThreeCXExtensionSensor(
         self._entry = entry
         self._extension_id = extension_id
         record = self._record
-        self._attr_unique_id = f"{entry.entry_id}_extension_{extension_id}"
-        self._attr_name = "Extension"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, f"{entry.entry_id}_extension_{extension_id}")},
             "via_device": (DOMAIN, entry.entry_id),
@@ -146,6 +146,17 @@ class ThreeCXExtensionSensor(
         """Return whether this extension still exists in 3CX."""
         return super().available and self._record is not None
 
+
+class ThreeCXExtensionSensor(ThreeCXExtensionEntity, SensorEntity):
+    """Representation of one 3CX V20 extension number."""
+
+    _attr_icon = "mdi:deskphone"
+
+    def __init__(self, coordinator, entry, extension_id: str) -> None:
+        super().__init__(coordinator, entry, extension_id)
+        self._attr_unique_id = f"{entry.entry_id}_extension_{extension_id}"
+        self._attr_name = "Extension"
+
     @property
     def native_value(self) -> str | None:
         """Use the extension number as the entity state."""
@@ -153,7 +164,7 @@ class ThreeCXExtensionSensor(
         return record.number if record else None
 
     @property
-    def extra_state_attributes(self) -> dict[str, str]:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Expose stable 3CX identity and name fields."""
         record = self._record
         if record is None:
@@ -164,4 +175,34 @@ class ThreeCXExtensionSensor(
             "first_name": record.first_name,
             "last_name": record.last_name,
             "display_name": record.name,
+        }
+
+
+class ThreeCXStatusSensor(ThreeCXExtensionEntity, SensorEntity):
+    """Expose the best available presence status and every supplied status field."""
+
+    _attr_icon = "mdi:account-circle"
+
+    def __init__(self, coordinator, entry, extension_id: str) -> None:
+        super().__init__(coordinator, entry, extension_id)
+        self._attr_unique_id = f"{entry.entry_id}_status_{extension_id}"
+        self._attr_name = "Status"
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the main status selected from the V20 user record."""
+        record = self._record
+        return record.presence_status if record else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose all status, profile, DND, route and registration fields."""
+        record = self._record
+        if record is None:
+            return {"3cx_id": self._extension_id}
+        return {
+            "3cx_id": record.extension_id,
+            "number": record.number,
+            "display_name": record.name,
+            **record.status_attributes,
         }
