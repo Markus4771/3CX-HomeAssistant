@@ -109,6 +109,7 @@ class ThreeCXCallControlBinarySensor(
         client = self.coordinator.call_control
         attributes: dict[str, object] = {
             "queue_agent_diagnostics": self.coordinator.queue_agent_diagnostics,
+            "live_state": self.coordinator.live_state.diagnostics(),
         }
         if client is None:
             attributes["status"] = "nicht gestartet"
@@ -190,11 +191,17 @@ class ThreeCXRegisteredBinarySensor(ThreeCXExtensionBinarySensor):
         record = self._record
         if record is None:
             return {"3cx_id": self._extension_id}
+        status = record.status_attributes
         return {
             "3cx_id": record.extension_id,
             "number": record.number,
             "display_name": record.name,
             "source": "3CX V20 user status fields",
+            "live_phone_state": status.get("live_phone_state"),
+            "live_call_id": status.get("live_call_id"),
+            "live_peer": status.get("live_peer"),
+            "live_direction": status.get("live_direction"),
+            "live_updated_at": status.get("live_updated_at"),
         }
 
 
@@ -218,10 +225,13 @@ class ThreeCXQueueLoggedInBinarySensor(ThreeCXExtensionBinarySensor):
         record = self._record
         if record is None:
             return {"3cx_id": self._extension_id}
+        status = record.status_attributes
         return {
             "3cx_id": record.extension_id,
             "number": record.number,
             "display_name": record.name,
             "warteschleifen_mitglied": list(record.queue_names),
             "angemeldet_in": list(record.queue_logged_in_names),
+            "live_queue_state": status.get("live_queue_state"),
+            "live_updated_at": status.get("live_updated_at"),
         }
