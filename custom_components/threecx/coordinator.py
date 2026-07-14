@@ -11,11 +11,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import ThreeCXApiClient, ThreeCXApiError, ThreeCXSnapshot
-from .const import (
-    DEFAULT_SCAN_INTERVAL,
-    DOMAIN,
-    XAPI_QUEUE_AGENT_PATH_TEMPLATES,
-)
+from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
+from .queue_agents import async_enrich_queue_agents
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -105,14 +102,14 @@ def _apply_user_queue_login_fallback(snapshot: ThreeCXSnapshot) -> ThreeCXSnapsh
             queue_logged_in[queue.queue_id].add(identity)
             extension_queue_names[extension.extension_id].add(queue.display_name)
 
-    snapshot.queue_records = tuple(
+    updated_queues = tuple(
         replace(
             queue,
             logged_in_members=tuple(sorted(queue_logged_in[queue.queue_id])),
         )
         for queue in snapshot.queue_records
     )
-    snapshot.extension_records = tuple(
+    updated_extensions = tuple(
         replace(
             extension,
             queue_logged_in_names=tuple(
@@ -121,6 +118,8 @@ def _apply_user_queue_login_fallback(snapshot: ThreeCXSnapshot) -> ThreeCXSnapsh
         )
         for extension in snapshot.extension_records
     )
+    snapshot.queue_records = updated_queues
+    snapshot.extension_records = updated_extensions
     return snapshot
 
 
@@ -144,80 +143,17 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.call_control: Any | None = None
         self.queue_agent_diagnostics: dict[str, Any] = {}
 
-    async def _async_probe_queue_agents(
-        self, snapshot: ThreeCXSnapshot
-    ) -> ThreeCXSnapshot:
-        """Load queue agents through build-specific navigation endpoints."""
-        if not snapshot.queue_records:
-            self.queue_agent_diagnostics = {}
-            return snapshot
-
-        updated_queues = []
-        diagnostics: dict[str, Any] = {}
-        for queue in snapshot.queue_records:
-            members = set(queue.members)
-            logged_in = set(queue.logged_in_members)
-            selected_endpoint: str | None = None
-            errors: list[str] = []
-            agent_fields: set[str] = set()
-            agent_count = 0
-
-            for template in XAPI_QUEUE_AGENT_PATH_TEMPLATES:
-                queue_id = queue.queue_id.replace("'", "''")
-                path = template.format(queue_id=queue_id)
-                try:
-                    values, _pages = await self.client._async_get_all_odata(path)
-                except ThreeCXApiError as err:
-                    errors.append(f"{path}: {err}")
-                    continue
-
-                selected_endpoint = path
-                agent_count = len(values)
-                for agent in values:
-                    if isinstance(agent, dict):
-                        agent_fields.update(str(key) for key in agent)
-                        for nested_key in ("User", "Extension", "Dn"):
-                            nested = agent.get(nested_key)
-                            if isinstance(nested, dict):
-                                agent_fields.update(
-                                    f"{nested_key}.{key}" for key in nested
-                                )
-                    number, identifier = self.client._agent_identity(agent)
-                    identity = number or identifier
-                    if not identity:
-                        continue
-                    members.add(identity)
-                    if self.client._agent_logged_in(agent) is True:
-                        logged_in.add(identity)
-                break
-
-            diagnostics[queue.display_name] = {
-                "queue_id": queue.queue_id,
-                "number": queue.number,
-                "endpoint": selected_endpoint,
-                "agent_count": agent_count,
-                "agent_fields": sorted(agent_fields),
-                "errors": errors[-5:],
-            }
-            updated_queues.append(
-                replace(
-                    queue,
-                    members=tuple(sorted(members)),
-                    logged_in_members=tuple(sorted(logged_in)),
-                )
-            )
-
-        snapshot.queue_records = tuple(updated_queues)
-        snapshot.extension_records = self.client._enrich_extensions_with_queues(
-            snapshot.extension_records, snapshot.queue_records
-        )
-        self.queue_agent_diagnostics = diagnostics
-        return snapshot
-
     async def _async_update_data(self) -> ThreeCXSnapshot:
         try:
             snapshot = await self.client.async_get_snapshot()
-            snapshot = await self._async_probe_queue_agents(snapshot)
+            snapshot, diagnostics = await async_enrich_queue_agents(
+                self.client, snapshot
+            )
+            self.queue_agent_diagnostics = diagnostics
+            snapshot.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
+                snapshot.extension_records,
+                snapshot.queue_records,
+            )
             return _apply_user_queue_login_fallback(snapshot)
         except ThreeCXApiError as err:
             raise UpdateFailed(f"3CX update failed: {err}") from err
