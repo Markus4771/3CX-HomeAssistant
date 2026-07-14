@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.3 – 2026-07-14
+
+- Added a user-import diagnostic sensor on the central 3CX device
+- Shows the number of API-returned, imported and skipped user records
+- Shows how many OData pages were loaded
+- Lists the reason for every skipped record, including missing IDs and duplicate IDs
+- Added Home Assistant log messages for import totals and skipped records
+- Added a permission hint when the 3CX API itself returns fewer users than expected
+
+## 0.4.2 – 2026-07-14
+
+- Fixed release publishing so the version tag and `threecx.zip` asset are created in the same GitHub Actions run
+- Prepared reliable HACS installation from the release asset
+
 ## 0.4.1 – 2026-07-14
 
 - Fixed HACS domain detection by declaring the `threecx` integration domain explicitly
