@@ -27,16 +27,98 @@ TokenProvider = Callable[[], Awaitable[str]]
 
 @dataclass(slots=True)
 class CallControlState:
-    """Current Call Control transport state."""
+    """Current Call Control transport and last-event state."""
 
     connected: bool = False
     endpoint: str | None = None
     last_error: str | None = None
     last_event_type: str | None = None
+    normalized_state: str = "unknown"
     last_event_at: str | None = None
     events_received: int = 0
     reconnects: int = 0
+    call_id: str | None = None
+    source: str | None = None
+    destination: str | None = None
+    direction: str | None = None
     last_event: dict[str, Any] = field(default_factory=dict)
+    recent_events: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _normalized_key(value: str) -> str:
+    return value.lower().replace("_", "").replace("-", "").replace(" ", "")
+
+
+def _walk_scalars(value: Any, prefix: str = "", depth: int = 0) -> dict[str, Any]:
+    """Flatten scalar values from a small nested event for tolerant matching."""
+    if depth > 6:
+        return {}
+    result: dict[str, Any] = {}
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            result.update(_walk_scalars(child, path, depth + 1))
+    elif isinstance(value, list):
+        for index, child in enumerate(value[:20]):
+            result.update(_walk_scalars(child, f"{prefix}[{index}]", depth + 1))
+    elif value is None or isinstance(value, (str, int, float, bool)):
+        result[prefix] = value
+    return result
+
+
+def _first_matching_value(flat: dict[str, Any], key_parts: tuple[str, ...]) -> str | None:
+    """Return the first non-empty scalar whose final key matches one of the names."""
+    normalized_parts = {_normalized_key(part) for part in key_parts}
+    for path, value in flat.items():
+        final_key = path.rsplit(".", 1)[-1].split("[", 1)[0]
+        if _normalized_key(final_key) in normalized_parts and value not in (None, ""):
+            return str(value)
+    return None
+
+
+def normalize_call_control_event(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize unknown 3CX event shapes into stable diagnostic fields."""
+    flat = _walk_scalars(payload)
+    raw_type = _first_matching_value(
+        flat, ("event", "eventType", "type", "name", "action", "state", "status")
+    ) or "unknown"
+    searchable = " ".join(str(value) for value in flat.values() if value is not None).lower()
+    searchable += f" {raw_type.lower()}"
+
+    if any(word in searchable for word in ("ringing", "ring", "incoming", "alerting")):
+        normalized = "ringing"
+    elif any(word in searchable for word in ("connected", "answered", "established", "talking")):
+        normalized = "connected"
+    elif any(word in searchable for word in ("dialing", "dialling", "outgoing", "calling")):
+        normalized = "dialing"
+    elif any(word in searchable for word in ("hold", "held", "onhold")):
+        normalized = "held"
+    elif any(word in searchable for word in ("transfer", "transferred")):
+        normalized = "transferred"
+    elif any(word in searchable for word in ("ended", "terminated", "disconnected", "hangup", "released")):
+        normalized = "ended"
+    elif "queue" in searchable and any(word in searchable for word in ("login", "loggedin", "logged in")):
+        normalized = "queue_login"
+    elif "queue" in searchable and any(word in searchable for word in ("logout", "loggedout", "logged out")):
+        normalized = "queue_logout"
+    else:
+        normalized = "unknown"
+
+    return {
+        "raw_type": raw_type,
+        "normalized_state": normalized,
+        "call_id": _first_matching_value(
+            flat, ("callId", "call_id", "connectionId", "legId", "id")
+        ),
+        "source": _first_matching_value(
+            flat, ("source", "from", "caller", "callerId", "origin", "src")
+        ),
+        "destination": _first_matching_value(
+            flat, ("destination", "to", "callee", "called", "target", "dst")
+        ),
+        "direction": _first_matching_value(flat, ("direction", "callDirection")),
+        "field_names": sorted(flat.keys())[:200],
+    }
 
 
 class ThreeCXCallControlClient:
@@ -113,26 +195,39 @@ class ThreeCXCallControlClient:
                 errors.append(f"{path}: {err}")
         raise ConnectionError("; ".join(errors) or "No Call Control endpoint configured")
 
-    @staticmethod
-    def _event_type(payload: dict[str, Any]) -> str:
-        for key in ("event", "eventType", "type", "name", "action", "state"):
-            value = payload.get(key)
-            if value not in (None, ""):
-                return str(value)
-        return "unknown"
-
     async def _handle_message(self, text: str) -> None:
         try:
             decoded = json.loads(text)
         except json.JSONDecodeError:
             decoded = {"type": "text", "value": text[:1000]}
         payload = decoded if isinstance(decoded, dict) else {"value": decoded}
-        event_type = self._event_type(payload)
+        normalized = normalize_call_control_event(payload)
+        timestamp = datetime.now(timezone.utc).isoformat()
+
         self.state.events_received += 1
-        self.state.last_event_type = event_type
-        self.state.last_event_at = datetime.now(timezone.utc).isoformat()
+        self.state.last_event_type = str(normalized["raw_type"])
+        self.state.normalized_state = str(normalized["normalized_state"])
+        self.state.last_event_at = timestamp
+        self.state.call_id = normalized["call_id"]
+        self.state.source = normalized["source"]
+        self.state.destination = normalized["destination"]
+        self.state.direction = normalized["direction"]
         self.state.last_event = payload
-        await self._event_callback(payload)
+        self.state.recent_events.append(
+            {
+                "at": timestamp,
+                "type": self.state.last_event_type,
+                "state": self.state.normalized_state,
+                "call_id": self.state.call_id,
+                "source": self.state.source,
+                "destination": self.state.destination,
+            }
+        )
+        del self.state.recent_events[:-20]
+
+        event_payload = dict(payload)
+        event_payload["_threecx_normalized"] = normalized
+        await self._event_callback(event_payload)
 
     async def _consume(self, websocket: ClientWebSocketResponse) -> None:
         self.state.connected = True
