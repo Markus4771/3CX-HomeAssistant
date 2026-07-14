@@ -14,7 +14,8 @@ def _text(value: Any) -> str:
 
 
 def _flatten(value: Any, result: dict[str, Any] | None = None) -> dict[str, Any]:
-    result = result or {}
+    if result is None:
+        result = {}
     if isinstance(value, dict):
         for key, child in value.items():
             if isinstance(child, (dict, list)):
@@ -33,6 +34,25 @@ def _pick(flat: dict[str, Any], *keys: str) -> str:
         if value not in (None, ""):
             return _text(value)
     return ""
+
+
+def _live_state(flat: dict[str, Any], normalized: dict[str, Any]) -> str:
+    """Prefer explicit queue/agent transitions over generic call words."""
+    original = _text(normalized.get("normalized_state")) or "unknown"
+    searchable = " ".join(_text(value).lower() for value in flat.values())
+    queue_related = "queue" in searchable or "agent" in searchable
+    if queue_related:
+        if any(word in searchable for word in ("logout", "loggedout", "logoff", "signedout")):
+            return "queue_logout"
+        if any(word in searchable for word in ("login", "loggedin", "logon", "signedin")):
+            return "queue_login"
+        if any(word in searchable for word in ("wrapup", "wrap-up", "aftercall", "after call")):
+            return "wrap_up"
+        if any(word in searchable for word in ("resume", "unpause", "available")):
+            return "agent_resume"
+        if any(word in searchable for word in ("pause", "paused", "break")):
+            return "agent_pause"
+    return original
 
 
 @dataclass(slots=True)
@@ -62,7 +82,7 @@ class ThreeCXLiveState:
     def ingest(self, payload: dict[str, Any], normalized: dict[str, Any]) -> bool:
         """Apply one normalized event when it can be mapped safely."""
         flat = _flatten(payload)
-        state = _text(normalized.get("normalized_state")) or "unknown"
+        state = _live_state(flat, normalized)
         extension = _pick(
             flat,
             "extension", "extensionnumber", "dnnumber", "usernumber",
@@ -112,7 +132,12 @@ class ThreeCXLiveState:
 
         if applied:
             self.events_applied += 1
-            self.last_applied_event = {**normalized, "extension": extension, "queue": queue}
+            self.last_applied_event = {
+                **normalized,
+                "normalized_state": state,
+                "extension": extension,
+                "queue": queue,
+            }
         else:
             self.events_ignored += 1
         return applied
