@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.13 – 2026-07-14
+
+- Added a central Agent Engine as the single merged model for users, queues and active calls
+- Added deterministic agent states for offline, registered, queue logged in/out, pause, wrap-up, ringing, dialing and talking
+- Added source tracking for Call Control, OData and Configuration API values
+- Recalculates user and queue entities from the same Agent Engine after every poll and live event
+- Added per-agent call ID, peer, direction, phone state and queue state diagnostics
+- Added per-queue resolved agents, state counts and agent-state mapping
+- Renamed the central live entity to `3CX Agent Engine Monitor`
+- Exposes Agent Engine diagnostics on the Call Control entity and user entities
+- Retains compatibility with the previous 0.9.12 State Engine diagnostics
+
 ## 0.9.2 – 2026-07-14
 
 - Added a dedicated `Call Control Event Monitor` entity
