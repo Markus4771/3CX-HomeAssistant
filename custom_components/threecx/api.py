@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from time import monotonic
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -10,6 +11,8 @@ from urllib.parse import urljoin, urlparse
 from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout
 
 from .const import TOKEN_PATH, XAPI_DEFS_PATH, XAPI_USERS_PATH
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ThreeCXApiError(Exception):
@@ -62,7 +65,9 @@ class ThreeCXExtension:
     @property
     def name(self) -> str:
         """Return the best available display name."""
-        full_name = " ".join(part for part in (self.first_name, self.last_name) if part).strip()
+        full_name = " ".join(
+            part for part in (self.first_name, self.last_name) if part
+        ).strip()
         return full_name or self.number or f"Extension {self.extension_id}"
 
     @property
@@ -81,6 +86,11 @@ class ThreeCXSnapshot:
     api_mode: str = "v20"
     system_version: str | None = None
     extension_records: tuple[ThreeCXExtension, ...] = ()
+    api_users_received: int = 0
+    api_users_imported: int = 0
+    api_users_skipped: int = 0
+    api_pages: int = 0
+    skipped_records: tuple[str, ...] = ()
     raw: dict[str, Any] | None = None
 
 
@@ -129,7 +139,9 @@ class ThreeCXApiClient:
             raise ThreeCXAuthenticationError(text or "3CX authentication failed")
         if response.status >= 400:
             text = await response.text()
-            raise ThreeCXApiError(f"3CX returned HTTP {response.status}: {text[:300]}")
+            raise ThreeCXApiError(
+                f"3CX returned HTTP {response.status}: {text[:300]}"
+            )
 
     async def async_authenticate(self, force: bool = False) -> str:
         """Obtain and cache a V20 client-credentials access token."""
@@ -159,7 +171,9 @@ class ThreeCXApiClient:
 
         token = payload.get("access_token")
         if not token:
-            raise ThreeCXAuthenticationError("3CX token response contained no access_token")
+            raise ThreeCXAuthenticationError(
+                "3CX token response contained no access_token"
+            )
         expires_in = int(payload.get("expires_in", 3600))
         self._access_token = str(token)
         self._token_expires_at = monotonic() + max(60, expires_in - 60)
@@ -172,7 +186,10 @@ class ThreeCXApiClient:
         try:
             async with self._session.get(
                 self._request_url(path_or_url),
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
                 ssl=self._verify_ssl,
                 timeout=ClientTimeout(total=20),
             ) as response:
@@ -187,11 +204,12 @@ class ThreeCXApiClient:
         except (ClientError, TimeoutError, ValueError) as err:
             raise ThreeCXConnectionError(str(err)) from err
 
-    async def _async_get_all_odata(self, path: str) -> list[Any]:
-        """Read every page of an OData collection."""
+    async def _async_get_all_odata(self, path: str) -> tuple[list[Any], int]:
+        """Read every page of an OData collection and return page count."""
         values: list[Any] = []
         next_link: str | None = path
         visited: set[str] = set()
+        pages = 0
 
         while next_link:
             url = self._request_url(next_link)
@@ -202,16 +220,19 @@ class ThreeCXApiClient:
             visited.add(url)
 
             payload, _ = await self._async_get(next_link)
+            pages += 1
             if not isinstance(payload, dict):
                 break
             page_values = payload.get("value", [])
             if isinstance(page_values, list):
                 values.extend(page_values)
-            next_link = payload.get("@odata.nextLink") or payload.get("odata.nextLink")
+            next_link = payload.get("@odata.nextLink") or payload.get(
+                "odata.nextLink"
+            )
             if next_link is not None:
                 next_link = str(next_link)
 
-        return values
+        return values, pages
 
     @staticmethod
     def _status_fields(item: dict[str, Any]) -> dict[str, Any]:
@@ -233,7 +254,7 @@ class ThreeCXApiClient:
             if value not in (None, ""):
                 return str(value)
 
-        for key, value in fields.items():
+        for value in fields.values():
             if value not in (None, "") and not isinstance(value, bool):
                 return str(value)
 
@@ -247,28 +268,53 @@ class ThreeCXApiClient:
         return "unknown"
 
     @classmethod
-    def _normalize_extensions(cls, values: list[Any]) -> tuple[ThreeCXExtension, ...]:
-        """Normalize V20 Users results and preserve all supplied status fields."""
+    def _normalize_extensions(
+        cls, values: list[Any]
+    ) -> tuple[tuple[ThreeCXExtension, ...], tuple[str, ...]]:
+        """Normalize V20 users and record every skipped item with a reason."""
         records: list[ThreeCXExtension] = []
-        for item in values:
+        skipped: list[str] = []
+        seen_ids: set[str] = set()
+
+        for index, item in enumerate(values, start=1):
             if not isinstance(item, dict):
+                skipped.append(f"Datensatz {index}: kein Objekt")
                 continue
-            extension_id = str(item.get("Id", "")).strip()
-            number = str(item.get("Number", "")).strip()
+
+            extension_id = str(item.get("Id", "") or "").strip()
+            number = str(item.get("Number", "") or "").strip()
+            first_name = str(item.get("FirstName", "") or "").strip()
+            last_name = str(item.get("LastName", "") or "").strip()
+            label = " ".join(part for part in (number, first_name, last_name) if part)
+
             if not extension_id:
+                skipped.append(
+                    f"Datensatz {index} ({label or 'ohne Namen'}): Id fehlt"
+                )
                 continue
+            if extension_id in seen_ids:
+                skipped.append(
+                    f"Datensatz {index} ({label or extension_id}): doppelte Id {extension_id}"
+                )
+                continue
+            seen_ids.add(extension_id)
+
             status_fields = cls._status_fields(item)
             records.append(
                 ThreeCXExtension(
                     extension_id=extension_id,
                     number=number,
-                    first_name=str(item.get("FirstName", "") or "").strip(),
-                    last_name=str(item.get("LastName", "") or "").strip(),
+                    first_name=first_name,
+                    last_name=last_name,
                     presence_status=cls._primary_status(item, status_fields),
                     status_fields=tuple(sorted(status_fields.items())),
                 )
             )
-        return tuple(sorted(records, key=lambda record: (record.number, record.name)))
+
+        return (
+            tuple(sorted(records, key=lambda record: (record.number, record.name))),
+            tuple(skipped),
+        )
 
     async def async_test_connection(self) -> bool:
         """Authenticate and validate access using the official quick-test endpoint."""
@@ -278,13 +324,24 @@ class ThreeCXApiClient:
     async def async_get_snapshot(self) -> ThreeCXSnapshot:
         """Fetch a normalized V20 Configuration API snapshot."""
         defs, defs_response = await self._async_get(XAPI_DEFS_PATH)
-        user_values = await self._async_get_all_odata(XAPI_USERS_PATH)
-        extension_records = self._normalize_extensions(user_values)
+        user_values, pages = await self._async_get_all_odata(XAPI_USERS_PATH)
+        extension_records, skipped_records = self._normalize_extensions(user_values)
         version = (
             defs_response.headers.get("X-3CX-Version")
             or defs_response.headers.get("3CX-Version")
             or defs_response.headers.get("Server-Version")
         )
+
+        _LOGGER.info(
+            "3CX user import: received=%s imported=%s skipped=%s pages=%s",
+            len(user_values),
+            len(extension_records),
+            len(skipped_records),
+            pages,
+        )
+        for reason in skipped_records:
+            _LOGGER.warning("3CX user skipped: %s", reason)
+
         return ThreeCXSnapshot(
             connected=True,
             extensions=len(extension_records),
@@ -292,10 +349,16 @@ class ThreeCXApiClient:
             api_mode=self._api_mode,
             system_version=version,
             extension_records=extension_records,
+            api_users_received=len(user_values),
+            api_users_imported=len(extension_records),
+            api_users_skipped=len(skipped_records),
+            api_pages=pages,
+            skipped_records=skipped_records,
             raw={
                 "endpoint": self.base_url,
-                "defs_count": len(defs.get("value", [])) if isinstance(defs, dict) else 0,
-                "users": user_values,
+                "defs_count": len(defs.get("value", []))
+                if isinstance(defs, dict)
+                else 0,
                 "active_calls_supported": False,
             },
         )
