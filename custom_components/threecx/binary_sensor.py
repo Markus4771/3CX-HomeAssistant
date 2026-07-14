@@ -25,6 +25,7 @@ async def async_setup_entry(
             ThreeCXConnectionBinarySensor(coordinator, entry),
             ThreeCXCallControlBinarySensor(coordinator, entry),
             ThreeCXEventMonitorBinarySensor(coordinator, entry),
+            ThreeCXLiveMonitorBinarySensor(coordinator, entry),
         ]
     )
 
@@ -111,6 +112,7 @@ class ThreeCXCallControlBinarySensor(
         attributes: dict[str, object] = {
             "queue_agent_diagnostics": self.coordinator.queue_agent_diagnostics,
             "live_state": self.coordinator.live_state.diagnostics(),
+            "state_engine": self.coordinator.state_engine_diagnostics,
         }
         if client is None:
             attributes["status"] = "nicht gestartet"
@@ -166,6 +168,34 @@ class ThreeCXEventMonitorBinarySensor(
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         return self.coordinator.event_monitor_diagnostics()
+
+
+class ThreeCXLiveMonitorBinarySensor(
+    CoordinatorEntity[ThreeCXDataUpdateCoordinator], BinarySensorEntity
+):
+    """Show the merged live timeline and state-engine result."""
+
+    _attr_has_entity_name = True
+    _attr_name = "3CX Live Monitor"
+    _attr_icon = "mdi:monitor-dashboard"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_live_monitor"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": entry.title,
+            "manufacturer": "3CX",
+            "model": "Phone System V20",
+        }
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.coordinator.data.connected)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        return self.coordinator.live_monitor_diagnostics()
 
 
 class ThreeCXExtensionBinarySensor(
@@ -230,6 +260,7 @@ class ThreeCXRegisteredBinarySensor(ThreeCXExtensionBinarySensor):
             "number": record.number,
             "display_name": record.name,
             "source": "3CX V20 user status fields",
+            "agent_state": status.get("agent_state"),
             "live_phone_state": status.get("live_phone_state"),
             "live_call_id": status.get("live_call_id"),
             "live_peer": status.get("live_peer"),
@@ -265,6 +296,7 @@ class ThreeCXQueueLoggedInBinarySensor(ThreeCXExtensionBinarySensor):
             "display_name": record.name,
             "warteschleifen_mitglied": list(record.queue_names),
             "angemeldet_in": list(record.queue_logged_in_names),
+            "agent_state": status.get("agent_state"),
             "live_queue_state": status.get("live_queue_state"),
             "live_updated_at": status.get("live_updated_at"),
         }
