@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.2 – 2026-07-14
+
+- Added the combined 3CX Home Assistant project logo and integrated it into the README
+- Changed the primary queue request to avoid fragile nested OData expansions
+- Added per-queue probing of multiple V20 agent navigation endpoint variants
+- Queue members and logged-in agents are merged into the existing queue devices
+- Added `queue_agent_diagnostics` with selected endpoint, agent count, returned field names and recent errors
+- Queue endpoint failures no longer make all queue entities unavailable
+
 ## 0.8.1 – 2026-07-14
 
 - Added tolerant normalization of unknown Call Control event structures
