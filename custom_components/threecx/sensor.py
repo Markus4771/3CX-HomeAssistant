@@ -55,7 +55,10 @@ async def async_setup_entry(
     """Set up 3CX sensors and dynamically discover extensions."""
     coordinator: ThreeCXDataUpdateCoordinator = entry.runtime_data
     async_add_entities(
-        ThreeCXSensor(coordinator, entry, description) for description in SENSORS
+        [
+            *(ThreeCXSensor(coordinator, entry, description) for description in SENSORS),
+            ThreeCXUserImportDiagnosticSensor(coordinator, entry),
+        ]
     )
 
     known_extension_ids: set[str] = set()
@@ -105,6 +108,47 @@ class ThreeCXSensor(CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntit
     def native_value(self) -> int | str:
         """Return the sensor value."""
         return self.entity_description.value_fn(self.coordinator.data)
+
+
+class ThreeCXUserImportDiagnosticSensor(
+    CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntity
+):
+    """Show how many user records the API returned and imported."""
+
+    _attr_has_entity_name = True
+    _attr_name = "User import diagnostic"
+    _attr_icon = "mdi:account-search"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_user_import_diagnostic"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": entry.title,
+            "manufacturer": "3CX",
+            "model": "Phone System V20",
+        }
+
+    @property
+    def native_value(self) -> int:
+        """Use the number of API-returned users as the state."""
+        return self.coordinator.data.api_users_received
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose import counts, page count and skipped reasons."""
+        data = self.coordinator.data
+        return {
+            "api_users_received": data.api_users_received,
+            "users_imported": data.api_users_imported,
+            "users_skipped": data.api_users_skipped,
+            "odata_pages": data.api_pages,
+            "skipped_records": list(data.skipped_records),
+            "permission_hint": (
+                "Wenn api_users_received bereits zu niedrig ist, begrenzt die "
+                "3CX-Rolle oder Abteilung des Dienstprinzipals die Sichtbarkeit."
+            ),
+        }
 
 
 class ThreeCXExtensionEntity(CoordinatorEntity[ThreeCXDataUpdateCoordinator]):
