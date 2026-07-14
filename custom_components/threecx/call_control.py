@@ -1,8 +1,8 @@
 """Experimental 3CX V20 Call Control realtime transport.
 
 The public 3CX documentation does not expose a stable machine-readable endpoint
-contract.  This module therefore isolates endpoint discovery from the existing
-Configuration API integration.  Failure to connect never prevents normal 3CX
+contract. This module therefore isolates endpoint discovery from the existing
+Configuration API integration. Failure to connect never prevents normal 3CX
 polling from working.
 """
 
@@ -153,18 +153,22 @@ class ThreeCXCallControlClient:
     async def _run(self) -> None:
         delay = 5
         while not self._stop.is_set():
+            websocket: ClientWebSocketResponse | None = None
             try:
                 websocket = await self._discover_connection()
                 self.state.reconnects += 1
                 delay = 5
-                async with websocket:
-                    await self._consume(websocket)
+                await self._consume(websocket)
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # Transport must never break config polling.
                 self.state.connected = False
                 self.state.last_error = str(err)[:1000]
                 _LOGGER.warning("3CX Call Control unavailable: %s", err)
+            finally:
+                if websocket is not None and not websocket.closed:
+                    await websocket.close()
+                self.state.connected = False
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=delay)
             except asyncio.TimeoutError:
