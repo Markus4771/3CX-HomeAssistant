@@ -32,10 +32,11 @@ jobs:
           with open("hacs.json", encoding="utf-8") as handle:
               data = json.load(handle)
           assert data.get("domains") == ["threecx"]
-          assert data.get("zip_release") is True
-          assert data.get("content_in_root") is True
-          assert data.get("filename") == "threecx.zip"
+          assert data.get("content_in_root") is False
+          assert "zip_release" not in data
+          assert "filename" not in data
           PY
+          test -f custom_components/threecx/manifest.json
           if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
             echo "version.txt and manifest.json do not match" >&2
             exit 1
@@ -54,24 +55,6 @@ jobs:
           python -m json.tool custom_components/threecx/manifest.json >/dev/null
           python -m json.tool hacs.json >/dev/null
 
-      - name: Build HACS root-content release ZIP
-        shell: bash
-        run: |
-          rm -rf dist
-          mkdir -p dist
-          cd custom_components/threecx
-          zip -r "../../dist/threecx.zip" . -x "*/__pycache__/*" "*.pyc"
-          cd ../..
-          test -f dist/threecx.zip
-          unzip -l dist/threecx.zip | grep -E '(^|[[:space:]])manifest.json$'
-          unzip -p dist/threecx.zip manifest.json | python -c 'import json,sys; data=json.load(sys.stdin); assert data["domain"] == "threecx"'
-
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: threecx-${{ steps.version.outputs.version }}
-          path: dist/threecx.zip
-
       - name: Publish or update GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -79,5 +62,3 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: 3CX Home Assistant ${{ steps.version.outputs.version }}
           generate_release_notes: true
-          files: dist/threecx.zip
-          overwrite_files: true
