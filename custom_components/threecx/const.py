@@ -33,8 +33,10 @@ XAPI_GROUP_PATHS = (
     f"{XAPI_BASE_PATH}/Groups?$count=true&$top=100&$expand=GroupMembers",
     f"{XAPI_BASE_PATH}/Groups?$count=true&$top=100",
 )
-# Queue agents are a navigation property and are not included in the normal
-# Queues response. Explicit expansion is required for membership/login sensors.
+# Queue agents are navigation records. In V20 the actual extension identity is
+# commonly nested in the agent's User navigation object, so both levels must be
+# expanded for membership and queue-login evaluation.
 XAPI_QUEUES_PATH = (
-    f"{XAPI_BASE_PATH}/Queues?$count=true&$top=100&$orderby=Number&$expand=Agents"
+    f"{XAPI_BASE_PATH}/Queues?$count=true&$top=100&$orderby=Number"
+    "&$expand=Agents($expand=User)"
 )
