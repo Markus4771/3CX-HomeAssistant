@@ -17,6 +17,7 @@ from .entity_set_status import async_apply_entity_set_status
 from .live_state import ThreeCXLiveState
 from .metadata_explorer import async_discover_queue_agent_metadata
 from .queue_agents import async_enrich_queue_agents
+from .state_engine import apply_state_engine
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -142,6 +143,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.queue_agent_diagnostics: dict[str, Any] = {}
         self.odata_metadata: dict[str, Any] = {}
         self.entity_set_status_diagnostics: dict[str, Any] = {}
+        self.state_engine_diagnostics: dict[str, Any] = {}
         self.live_state = ThreeCXLiveState()
         self.event_history: list[dict[str, Any]] = []
 
@@ -173,7 +175,12 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         )
         del self.event_history[:-200]
         if applied and self.data is not None:
-            self.data = self.live_state.apply_to_snapshot(self.data)
+            updated = self.live_state.apply_to_snapshot(self.data)
+            updated.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
+                updated.extension_records,
+                updated.queue_records,
+            )
+            self.data, self.state_engine_diagnostics = apply_state_engine(updated)
         self.async_update_listeners()
         return applied
 
@@ -188,6 +195,16 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             "events_ignored": ignored,
             "last_event": self.event_history[-1] if self.event_history else None,
             "recent_events": list(self.event_history[-50:]),
+        }
+
+    def live_monitor_diagnostics(self) -> dict[str, Any]:
+        """Return a concise timeline for the central Live Monitor sensor."""
+        return {
+            "event_count": len(self.event_history),
+            "last_event": self.event_history[-1] if self.event_history else None,
+            "timeline": list(self.event_history[-25:]),
+            "state_engine": self.state_engine_diagnostics,
+            "live_state": self.live_state.diagnostics(),
         }
 
     async def _async_update_data(self) -> ThreeCXSnapshot:
@@ -214,6 +231,12 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
                 snapshot.queue_records,
             )
             snapshot = _apply_user_queue_login_fallback(snapshot)
-            return self.live_state.apply_to_snapshot(snapshot)
+            snapshot = self.live_state.apply_to_snapshot(snapshot)
+            snapshot.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
+                snapshot.extension_records,
+                snapshot.queue_records,
+            )
+            snapshot, self.state_engine_diagnostics = apply_state_engine(snapshot)
+            return snapshot
         except ThreeCXApiError as err:
             raise UpdateFailed(f"3CX update failed: {err}") from err
