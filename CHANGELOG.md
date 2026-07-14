@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 – 2026-07-14
+
+- Added PBX registration detection for every user/extension
+- Added binary sensor `An Anlage angemeldet` per extension
+- Added `/xapi/v1/Queues` retrieval with graceful fallback when unavailable
+- Added queue membership and queue login detection for every extension
+- Added binary sensor `In Warteschleife angemeldet` per extension
+- Added per-user `Warteschleifenstatus` sensor with membership and logged-in queue attributes
+- Added central `Warteschleifen` sensor listing every queue, all members and currently logged-in members
+- Added dynamic field-name detection for differences between 3CX V20 update builds
+- Queue or registration values that are not exposed by the installed build are shown as unknown instead of breaking the integration
+
 ## 0.4.4 – 2026-07-14
 
 - Changed the V20 Users request to include `$count=true`
