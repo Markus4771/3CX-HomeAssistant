@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -138,16 +139,52 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.call_control: Any | None = None
         self.queue_agent_diagnostics: dict[str, Any] = {}
         self.live_state = ThreeCXLiveState()
+        self.event_history: list[dict[str, Any]] = []
 
     def ingest_live_event(
         self, payload: dict[str, Any], normalized: dict[str, Any]
     ) -> bool:
-        """Apply one Call Control event and refresh entities immediately."""
+        """Apply one Call Control event, record it and refresh entities."""
         applied = self.live_state.ingest(payload, normalized)
+        live_event = self.live_state.last_applied_event if applied else {}
+        self.event_history.append(
+            {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "raw_type": str(normalized.get("raw_type", "unknown")),
+                "normalized_state": str(
+                    live_event.get(
+                        "normalized_state",
+                        normalized.get("normalized_state", "unknown"),
+                    )
+                ),
+                "applied": applied,
+                "extension": live_event.get("extension"),
+                "queue": live_event.get("queue"),
+                "call_id": normalized.get("call_id"),
+                "source": normalized.get("source"),
+                "destination": normalized.get("destination"),
+                "direction": normalized.get("direction"),
+                "field_names": list(normalized.get("field_names", []))[:100],
+            }
+        )
+        del self.event_history[:-200]
         if applied and self.data is not None:
             self.data = self.live_state.apply_to_snapshot(self.data)
         self.async_update_listeners()
         return applied
+
+    def event_monitor_diagnostics(self) -> dict[str, Any]:
+        """Return compact event diagnostics suitable for entity attributes."""
+        applied = sum(1 for event in self.event_history if event["applied"])
+        ignored = len(self.event_history) - applied
+        return {
+            "buffer_size": len(self.event_history),
+            "buffer_limit": 200,
+            "events_applied": applied,
+            "events_ignored": ignored,
+            "last_event": self.event_history[-1] if self.event_history else None,
+            "recent_events": list(self.event_history[-50:]),
+        }
 
     async def _async_update_data(self) -> ThreeCXSnapshot:
         try:
