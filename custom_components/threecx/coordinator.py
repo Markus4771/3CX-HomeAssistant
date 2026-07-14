@@ -11,13 +11,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .agent_engine import apply_agent_engine
 from .api import ThreeCXApiClient, ThreeCXApiError, ThreeCXSnapshot
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .entity_set_status import async_apply_entity_set_status
 from .live_state import ThreeCXLiveState
 from .metadata_explorer import async_discover_queue_agent_metadata
 from .queue_agents import async_enrich_queue_agents
-from .state_engine import apply_state_engine
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -143,9 +143,22 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.queue_agent_diagnostics: dict[str, Any] = {}
         self.odata_metadata: dict[str, Any] = {}
         self.entity_set_status_diagnostics: dict[str, Any] = {}
+        self.agent_engine_diagnostics: dict[str, Any] = {}
+        # Compatibility alias for entities created by 0.9.12.
         self.state_engine_diagnostics: dict[str, Any] = {}
         self.live_state = ThreeCXLiveState()
         self.event_history: list[dict[str, Any]] = []
+
+    def _apply_engines(self, snapshot: ThreeCXSnapshot) -> ThreeCXSnapshot:
+        """Recalculate user queue membership and the central Agent Engine."""
+        snapshot.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
+            snapshot.extension_records,
+            snapshot.queue_records,
+        )
+        snapshot, diagnostics = apply_agent_engine(snapshot)
+        self.agent_engine_diagnostics = diagnostics
+        self.state_engine_diagnostics = diagnostics
+        return snapshot
 
     def ingest_live_event(
         self, payload: dict[str, Any], normalized: dict[str, Any]
@@ -176,11 +189,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         del self.event_history[:-200]
         if applied and self.data is not None:
             updated = self.live_state.apply_to_snapshot(self.data)
-            updated.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
-                updated.extension_records,
-                updated.queue_records,
-            )
-            self.data, self.state_engine_diagnostics = apply_state_engine(updated)
+            self.data = self._apply_engines(updated)
         self.async_update_listeners()
         return applied
 
@@ -198,12 +207,12 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         }
 
     def live_monitor_diagnostics(self) -> dict[str, Any]:
-        """Return a concise timeline for the central Live Monitor sensor."""
+        """Return the central Agent, Queue and Call Engine view."""
         return {
             "event_count": len(self.event_history),
             "last_event": self.event_history[-1] if self.event_history else None,
             "timeline": list(self.event_history[-25:]),
-            "state_engine": self.state_engine_diagnostics,
+            "agent_engine": self.agent_engine_diagnostics,
             "live_state": self.live_state.diagnostics(),
         }
 
@@ -232,11 +241,6 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             )
             snapshot = _apply_user_queue_login_fallback(snapshot)
             snapshot = self.live_state.apply_to_snapshot(snapshot)
-            snapshot.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
-                snapshot.extension_records,
-                snapshot.queue_records,
-            )
-            snapshot, self.state_engine_diagnostics = apply_state_engine(snapshot)
-            return snapshot
+            return self._apply_engines(snapshot)
         except ThreeCXApiError as err:
             raise UpdateFailed(f"3CX update failed: {err}") from err
