@@ -33,12 +33,21 @@ XAPI_GROUP_PATHS = (
     f"{XAPI_BASE_PATH}/Groups?$count=true&$top=100&$expand=GroupMembers",
     f"{XAPI_BASE_PATH}/Groups?$count=true&$top=100",
 )
-# Queue agents are navigation records. In V20 the actual extension identity is
-# commonly nested in the agent's User navigation object, so both levels must be
-# expanded for membership and queue-login evaluation.
+# Load queues without an expansion first. Several V20 builds reject nested
+# $expand expressions even though their agent navigation can be queried
+# separately. The coordinator probes the navigation endpoints afterwards.
 XAPI_QUEUES_PATH = (
     f"{XAPI_BASE_PATH}/Queues?$count=true&$top=100&$orderby=Number"
-    "&$expand=Agents($expand=User)"
+)
+# Queue-agent navigation differs between V20 update builds. The queue id is
+# inserted into every candidate. A failed candidate is diagnostic only and does
+# not make the complete integration unavailable.
+XAPI_QUEUE_AGENT_PATH_TEMPLATES = (
+    f"{XAPI_BASE_PATH}/Queues({{queue_id}})/Agents?$expand=User",
+    f"{XAPI_BASE_PATH}/Queues({{queue_id}})/Agents",
+    f"{XAPI_BASE_PATH}/Queues('{{queue_id}}')/Agents?$expand=User",
+    f"{XAPI_BASE_PATH}/Queues('{{queue_id}}')/Agents",
+    f"{XAPI_BASE_PATH}/Queues/{{queue_id}}/Agents",
 )
 
 # Call Control is intentionally isolated from Configuration API polling. 3CX
