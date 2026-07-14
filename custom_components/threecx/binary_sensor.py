@@ -24,6 +24,7 @@ async def async_setup_entry(
         [
             ThreeCXConnectionBinarySensor(coordinator, entry),
             ThreeCXCallControlBinarySensor(coordinator, entry),
+            ThreeCXEventMonitorBinarySensor(coordinator, entry),
         ]
     )
 
@@ -133,6 +134,34 @@ class ThreeCXCallControlBinarySensor(
             }
         )
         return attributes
+
+
+class ThreeCXEventMonitorBinarySensor(
+    CoordinatorEntity[ThreeCXDataUpdateCoordinator], BinarySensorEntity
+):
+    """Expose the compact 200-event Call Control diagnostic buffer."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Call Control Event Monitor"
+    _attr_icon = "mdi:timeline-text"
+
+    def __init__(self, coordinator, entry) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{entry.entry_id}_call_control_event_monitor"
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, entry.entry_id)},
+            "name": entry.title,
+            "manufacturer": "3CX",
+            "model": "Phone System V20",
+        }
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.coordinator.event_history)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        return self.coordinator.event_monitor_diagnostics()
 
 
 class ThreeCXExtensionBinarySensor(
