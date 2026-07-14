@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 – 2026-07-14
+
+- Fixed HTTP 400 startup failure on 3CX V20 systems that enforce a maximum OData `$top` value of 100
+- Changed Users and Queues requests from `$top=1000` to `$top=100`
+- Keeps automatic `@odata.nextLink` pagination so more than 100 records are still loaded
+
 ## 0.5.0 – 2026-07-14
 
 - Added PBX registration detection for every user/extension
@@ -15,7 +21,7 @@
 ## 0.4.4 – 2026-07-14
 
 - Changed the V20 Users request to include `$count=true`
-- Requests up to 1000 user records in one response with `$top=1000`
+- Requests up to 100 user records per response with `$top=100`
 - Keeps OData next-link pagination as a fallback
 - Works around V20 responses that return a shortened first collection without a usable continuation link
 - Keeps complete user records so dynamic presence and status detection continues to work
