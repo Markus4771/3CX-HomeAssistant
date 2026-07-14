@@ -55,23 +55,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> b
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def async_handle_call_control(payload: dict[str, Any]) -> None:
-        """Forward every Call Control frame to Home Assistant's event bus."""
-        event_type = next(
-            (
-                payload.get(key)
-                for key in ("event", "eventType", "type", "name", "action", "state")
-                if payload.get(key) not in (None, "")
-            ),
-            "unknown",
-        )
+        """Forward raw and normalized Call Control frames to Home Assistant."""
+        normalized = payload.get("_threecx_normalized", {})
+        if not isinstance(normalized, dict):
+            normalized = {}
+        raw_type = normalized.get("raw_type", "unknown")
+        normalized_state = normalized.get("normalized_state", "unknown")
         event_data = {
             "config_entry_id": entry.entry_id,
-            "event_type": str(event_type),
+            "event_type": str(raw_type),
+            "normalized_state": str(normalized_state),
+            "call_id": normalized.get("call_id"),
+            "source": normalized.get("source"),
+            "destination": normalized.get("destination"),
+            "direction": normalized.get("direction"),
             "payload": payload,
         }
         hass.bus.async_fire(EVENT_CALL_CONTROL, event_data)
         hass.bus.async_fire(
-            f"{DOMAIN}_{_safe_event_name(event_type)}",
+            f"{DOMAIN}_{_safe_event_name(normalized_state)}",
             event_data,
         )
         coordinator.async_update_listeners()
