@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0 – 2026-07-14
+
+- Added one Home Assistant device for every 3CX queue
+- Added per-queue sensor for configured member count
+- Added per-queue sensor for currently logged-in agent count
+- Added per-queue agent-status sensor listing logged-in and logged-out members
+- Added central count of PBX-registered extensions
+- Added central count of users logged into at least one queue
+- Extended the central queue overview with member counts
+- New queue devices are discovered automatically during later coordinator updates
+- Values not exposed by the Configuration API, such as live waiting callers, remain unavailable instead of being guessed
+- Call Control API live call states and write actions remain intentionally separate until their documented endpoints are implemented
+
 ## 0.5.1 – 2026-07-14
 
 - Fixed HTTP 400 startup failure on 3CX V20 systems that enforce a maximum OData `$top` value of 100
