@@ -22,6 +22,10 @@ API_MODE_LEGACY = "legacy"
 TOKEN_PATH = "/connect/token"
 XAPI_BASE_PATH = "/xapi/v1"
 XAPI_DEFS_PATH = f"{XAPI_BASE_PATH}/Defs?$select=Id"
-# Fetch complete user records. Status-related fields differ between V20 updates,
-# therefore they are detected dynamically instead of being restricted by $select.
-XAPI_USERS_PATH = f"{XAPI_BASE_PATH}/Users?$orderby=Number"
+# Fetch complete user records and explicitly request a large page plus the OData
+# count. Some 3CX V20 builds otherwise return a shortened collection without a
+# usable nextLink. Status-related fields remain unrestricted and are detected
+# dynamically by the API adapter.
+XAPI_USERS_PATH = (
+    f"{XAPI_BASE_PATH}/Users?$count=true&$top=1000&$orderby=Number"
+)
