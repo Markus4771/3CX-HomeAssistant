@@ -112,7 +112,7 @@ class ThreeCXCallControlBinarySensor(
         attributes: dict[str, object] = {
             "queue_agent_diagnostics": self.coordinator.queue_agent_diagnostics,
             "live_state": self.coordinator.live_state.diagnostics(),
-            "state_engine": self.coordinator.state_engine_diagnostics,
+            "agent_engine": self.coordinator.agent_engine_diagnostics,
         }
         if client is None:
             attributes["status"] = "nicht gestartet"
@@ -173,11 +173,11 @@ class ThreeCXEventMonitorBinarySensor(
 class ThreeCXLiveMonitorBinarySensor(
     CoordinatorEntity[ThreeCXDataUpdateCoordinator], BinarySensorEntity
 ):
-    """Show the merged live timeline and state-engine result."""
+    """Show the merged live timeline and Agent Engine result."""
 
     _attr_has_entity_name = True
-    _attr_name = "3CX Live Monitor"
-    _attr_icon = "mdi:monitor-dashboard"
+    _attr_name = "3CX Agent Engine Monitor"
+    _attr_icon = "mdi:account-cog"
 
     def __init__(self, coordinator, entry) -> None:
         super().__init__(coordinator)
@@ -261,6 +261,7 @@ class ThreeCXRegisteredBinarySensor(ThreeCXExtensionBinarySensor):
             "display_name": record.name,
             "source": "3CX V20 user status fields",
             "agent_state": status.get("agent_state"),
+            "agent_state_source": status.get("agent_state_source"),
             "live_phone_state": status.get("live_phone_state"),
             "live_call_id": status.get("live_call_id"),
             "live_peer": status.get("live_peer"),
@@ -297,6 +298,7 @@ class ThreeCXQueueLoggedInBinarySensor(ThreeCXExtensionBinarySensor):
             "warteschleifen_mitglied": list(record.queue_names),
             "angemeldet_in": list(record.queue_logged_in_names),
             "agent_state": status.get("agent_state"),
+            "agent_state_source": status.get("agent_state_source"),
             "live_queue_state": status.get("live_queue_state"),
             "live_updated_at": status.get("live_updated_at"),
         }
