@@ -10,7 +10,13 @@ from urllib.parse import urljoin, urlparse
 
 from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout
 
-from .const import TOKEN_PATH, XAPI_DEFS_PATH, XAPI_QUEUES_PATH, XAPI_USERS_PATH
+from .const import (
+    TOKEN_PATH,
+    XAPI_DEFS_PATH,
+    XAPI_GROUP_PATHS,
+    XAPI_QUEUES_PATH,
+    XAPI_USERS_PATH,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,10 +45,18 @@ _REGISTRATION_KEYS = (
     "IsRegistered", "Registered", "IsExtensionRegistered", "ExtensionRegistered",
     "RegistrationStatus", "DeviceRegistered", "IsOnline", "Online",
 )
+_ROLE_KEYS = ("Role", "RoleName", "UserRole", "Rights", "SystemRole", "GroupRole")
+_DEPARTMENT_KEYS = ("Department", "DepartmentName", "Group", "GroupName", "Groups")
+_ACTIVE_KEYS = ("IsActive", "Active", "Enabled", "IsEnabled", "Disabled")
+_EMAIL_KEYS = ("EmailAddress", "Email", "Mail")
+_MOBILE_KEYS = ("Mobile", "MobileNumber", "CellPhone", "Cell")
 _QUEUE_LIST_KEYS = ("Agents", "Members", "QueueAgents", "Users", "Extensions")
 _QUEUE_LOGIN_KEYS = (
     "IsLoggedIn", "LoggedIn", "QueueLoggedIn", "IsQueueLoggedIn",
     "AgentLoggedIn", "LoginStatus", "QueueStatus", "Status",
+)
+_GROUP_MEMBER_KEYS = (
+    "Members", "Users", "GroupMembers", "Participants", "Extensions", "Agents",
 )
 
 
@@ -71,6 +85,35 @@ def _as_bool(value: Any) -> bool | None:
     return None
 
 
+def _first_value(item: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        if key in item and item[key] not in (None, ""):
+            return item[key]
+    lookup = {_normalized_key(key): value for key, value in item.items()}
+    for key in keys:
+        value = lookup.get(_normalized_key(key))
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _string_value(item: dict[str, Any], keys: tuple[str, ...]) -> str:
+    value = _first_value(item, keys)
+    if isinstance(value, dict):
+        value = _first_value(value, ("Name", "DisplayName", "Title", "RoleName"))
+    if isinstance(value, list):
+        values: list[str] = []
+        for entry in value:
+            if isinstance(entry, dict):
+                name = _first_value(entry, ("Name", "DisplayName", "Title"))
+                if name:
+                    values.append(str(name))
+            elif entry not in (None, ""):
+                values.append(str(entry))
+        return ", ".join(values)
+    return str(value or "").strip()
+
+
 def _simple_attributes(item: dict[str, Any], parts: tuple[str, ...]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in item.items():
@@ -80,18 +123,6 @@ def _simple_attributes(item: dict[str, Any], parts: tuple[str, ...]) -> dict[str
         ):
             result[key] = value
     return result
-
-
-def _first_value(item: dict[str, Any], keys: tuple[str, ...]) -> Any:
-    for key in keys:
-        if key in item and item[key] not in (None, ""):
-            return item[key]
-    normalized_lookup = {_normalized_key(key): value for key, value in item.items()}
-    for key in keys:
-        value = normalized_lookup.get(_normalized_key(key))
-        if value not in (None, ""):
-            return value
-    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +149,12 @@ class ThreeCXExtension:
     number: str
     first_name: str = ""
     last_name: str = ""
+    role: str = ""
+    department: str = ""
+    email: str = ""
+    mobile: str = ""
+    active: bool | None = None
+    source: str = "Users"
     presence_status: str = "unknown"
     registered: bool | None = None
     queue_names: tuple[str, ...] = ()
@@ -155,6 +192,11 @@ class ThreeCXSnapshot:
     api_users_imported: int = 0
     api_users_skipped: int = 0
     api_pages: int = 0
+    group_pages: int = 0
+    group_users_found: int = 0
+    user_sources: tuple[tuple[str, int], ...] = ()
+    group_endpoint: str | None = None
+    group_error: str | None = None
     queue_pages: int = 0
     queues_available: bool = False
     queue_error: str | None = None
@@ -205,7 +247,9 @@ class ThreeCXApiClient:
             raise ThreeCXAuthenticationError(text or "3CX authentication failed")
         if response.status >= 400:
             text = await response.text()
-            raise ThreeCXApiError(f"3CX returned HTTP {response.status}: {text[:300]}")
+            raise ThreeCXApiError(
+                f"3CX returned HTTP {response.status}: {text[:300]}"
+            )
 
     async def async_authenticate(self, force: bool = False) -> str:
         if not force and self._access_token and monotonic() < self._token_expires_at:
@@ -232,7 +276,9 @@ class ThreeCXApiClient:
             raise ThreeCXConnectionError(str(err)) from err
         token = payload.get("access_token")
         if not token:
-            raise ThreeCXAuthenticationError("3CX token response contained no access_token")
+            raise ThreeCXAuthenticationError(
+                "3CX token response contained no access_token"
+            )
         expires_in = int(payload.get("expires_in", 3600))
         self._access_token = str(token)
         self._token_expires_at = monotonic() + max(60, expires_in - 60)
@@ -245,7 +291,10 @@ class ThreeCXApiClient:
         try:
             async with self._session.get(
                 self._request_url(path_or_url),
-                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/json",
+                },
                 ssl=self._verify_ssl,
                 timeout=ClientTimeout(total=20),
             ) as response:
@@ -279,7 +328,9 @@ class ThreeCXApiClient:
             page_values = payload.get("value", [])
             if isinstance(page_values, list):
                 values.extend(page_values)
-            next_link = payload.get("@odata.nextLink") or payload.get("odata.nextLink")
+            next_link = payload.get("@odata.nextLink") or payload.get(
+                "odata.nextLink"
+            )
             if next_link is not None:
                 next_link = str(next_link)
         return values, pages
@@ -307,8 +358,7 @@ class ThreeCXApiClient:
 
     @staticmethod
     def _registration_status(item: dict[str, Any]) -> bool | None:
-        value = _first_value(item, _REGISTRATION_KEYS)
-        status = _as_bool(value)
+        status = _as_bool(_first_value(item, _REGISTRATION_KEYS))
         if status is not None:
             return status
         for key, candidate in item.items():
@@ -318,6 +368,121 @@ class ThreeCXApiClient:
                 if status is not None:
                     return status
         return None
+
+    @staticmethod
+    def _active_status(item: dict[str, Any]) -> bool | None:
+        value = _first_value(item, _ACTIVE_KEYS)
+        if value is None:
+            return None
+        if "Disabled" in item and value is item.get("Disabled"):
+            disabled = _as_bool(value)
+            return None if disabled is None else not disabled
+        return _as_bool(value)
+
+    @staticmethod
+    def _looks_like_user(item: dict[str, Any]) -> bool:
+        number = _string_value(item, ("Number", "ExtensionNumber", "DnNumber"))
+        identifier = _string_value(item, ("Id", "UserId", "ExtensionId", "DnId"))
+        has_user_fields = any(
+            key in item
+            for key in (
+                "FirstName", "LastName", "EmailAddress", "Email",
+                "Role", "RoleName", "UserRole",
+            )
+        )
+        return bool(number or identifier) and has_user_fields
+
+    @classmethod
+    def _extract_group_users(
+        cls, groups: list[Any]
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        found: list[dict[str, Any]] = []
+        source_counts: dict[str, int] = {}
+
+        def visit(value: Any, department: str, source: str, depth: int = 0) -> None:
+            if depth > 6:
+                return
+            if isinstance(value, list):
+                for entry in value:
+                    visit(entry, department, source, depth + 1)
+                return
+            if not isinstance(value, dict):
+                return
+            if cls._looks_like_user(value):
+                copied = dict(value)
+                if department and not _string_value(copied, _DEPARTMENT_KEYS):
+                    copied["DepartmentName"] = department
+                copied["_import_source"] = source
+                found.append(copied)
+                source_counts[source] = source_counts.get(source, 0) + 1
+                return
+            nested_department = (
+                _string_value(value, ("Name", "DisplayName", "GroupName"))
+                or department
+            )
+            for key in _GROUP_MEMBER_KEYS:
+                if key in value:
+                    visit(value[key], nested_department, source, depth + 1)
+
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            department = _string_value(
+                group, ("Name", "DisplayName", "GroupName")
+            )
+            for key in _GROUP_MEMBER_KEYS:
+                if key in group:
+                    visit(group[key], department, f"Groups.{key}")
+        return found, source_counts
+
+    @staticmethod
+    def _merge_user_values(
+        primary: list[Any], fallback: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        merged: dict[str, dict[str, Any]] = {}
+        number_index: dict[str, str] = {}
+        source_counts: dict[str, int] = {"Users": 0}
+
+        def add(item: dict[str, Any], source: str) -> None:
+            identifier = _string_value(
+                item, ("Id", "UserId", "ExtensionId", "DnId")
+            )
+            number = _string_value(
+                item, ("Number", "ExtensionNumber", "DnNumber")
+            )
+            if not identifier and number:
+                identifier = number_index.get(number, f"number:{number}")
+            if not identifier:
+                return
+            existing = merged.get(identifier)
+            if existing is None and number and number in number_index:
+                identifier = number_index[number]
+                existing = merged.get(identifier)
+            if existing is None:
+                copied = dict(item)
+                copied["_import_source"] = source
+                merged[identifier] = copied
+                if number:
+                    number_index[number] = identifier
+                source_counts[source] = source_counts.get(source, 0) + 1
+                return
+            for key, value in item.items():
+                if key.startswith("_"):
+                    continue
+                if existing.get(key) in (None, "", [], {}) and value not in (
+                    None, "", [], {}
+                ):
+                    existing[key] = value
+            prior_source = str(existing.get("_import_source", "Users"))
+            if source not in prior_source.split(","):
+                existing["_import_source"] = f"{prior_source},{source}"
+
+        for item in primary:
+            if isinstance(item, dict):
+                add(item, "Users")
+        for item in fallback:
+            add(item, str(item.get("_import_source", "Groups")))
+        return list(merged.values()), source_counts
 
     @classmethod
     def _normalize_extensions(
@@ -330,17 +495,32 @@ class ThreeCXApiClient:
             if not isinstance(item, dict):
                 skipped.append(f"Datensatz {index}: kein Objekt")
                 continue
-            extension_id = str(item.get("Id", "") or "").strip()
-            number = str(item.get("Number", "") or "").strip()
-            first_name = str(item.get("FirstName", "") or "").strip()
-            last_name = str(item.get("LastName", "") or "").strip()
-            label = " ".join(part for part in (number, first_name, last_name) if part)
+            extension_id = _string_value(
+                item, ("Id", "UserId", "ExtensionId", "DnId")
+            )
+            number = _string_value(
+                item, ("Number", "ExtensionNumber", "DnNumber")
+            )
+            first_name = _string_value(item, ("FirstName", "GivenName"))
+            last_name = _string_value(
+                item, ("LastName", "Surname", "FamilyName")
+            )
+            label = " ".join(
+                part for part in (number, first_name, last_name) if part
+            )
             if not extension_id:
-                skipped.append(f"Datensatz {index} ({label or 'ohne Namen'}): Id fehlt")
-                continue
+                if number:
+                    extension_id = f"number:{number}"
+                else:
+                    skipped.append(
+                        f"Datensatz {index} ({label or 'ohne Namen'}): "
+                        "Id und Nummer fehlen"
+                    )
+                    continue
             if extension_id in seen_ids:
                 skipped.append(
-                    f"Datensatz {index} ({label or extension_id}): doppelte Id {extension_id}"
+                    f"Datensatz {index} ({label or extension_id}): "
+                    f"doppelte Id {extension_id}"
                 )
                 continue
             seen_ids.add(extension_id)
@@ -351,6 +531,12 @@ class ThreeCXApiClient:
                     number=number,
                     first_name=first_name,
                     last_name=last_name,
+                    role=_string_value(item, _ROLE_KEYS),
+                    department=_string_value(item, _DEPARTMENT_KEYS),
+                    email=_string_value(item, _EMAIL_KEYS),
+                    mobile=_string_value(item, _MOBILE_KEYS),
+                    active=cls._active_status(item),
+                    source=str(item.get("_import_source", "Users")),
                     presence_status=cls._primary_status(item, status_fields),
                     registered=cls._registration_status(item),
                     status_fields=tuple(sorted(status_fields.items())),
@@ -368,30 +554,28 @@ class ThreeCXApiClient:
             return value, value
         if not isinstance(agent, dict):
             return "", ""
-        number = str(
-            _first_value(
-                agent,
-                ("Number", "Extension", "ExtensionNumber", "UserNumber", "DnNumber"),
-            )
-            or ""
-        ).strip()
-        identifier = str(
-            _first_value(agent, ("Id", "UserId", "ExtensionId", "DnId")) or ""
-        ).strip()
+        number = _string_value(
+            agent,
+            ("Number", "Extension", "ExtensionNumber", "UserNumber", "DnNumber"),
+        )
+        identifier = _string_value(
+            agent, ("Id", "UserId", "ExtensionId", "DnId")
+        )
         nested = agent.get("User") or agent.get("Extension") or agent.get("Dn")
         if isinstance(nested, dict):
-            number = number or str(
-                _first_value(nested, ("Number", "ExtensionNumber", "DnNumber")) or ""
-            ).strip()
-            identifier = identifier or str(_first_value(nested, ("Id", "UserId")) or "").strip()
+            number = number or _string_value(
+                nested, ("Number", "ExtensionNumber", "DnNumber")
+            )
+            identifier = identifier or _string_value(
+                nested, ("Id", "UserId")
+            )
         return number, identifier
 
     @staticmethod
     def _agent_logged_in(agent: Any) -> bool | None:
         if not isinstance(agent, dict):
             return None
-        value = _first_value(agent, _QUEUE_LOGIN_KEYS)
-        return _as_bool(value)
+        return _as_bool(_first_value(agent, _QUEUE_LOGIN_KEYS))
 
     @classmethod
     def _normalize_queues(cls, values: list[Any]) -> tuple[ThreeCXQueue, ...]:
@@ -401,9 +585,7 @@ class ThreeCXApiClient:
                 continue
             queue_id = str(item.get("Id", "") or f"queue-{index}").strip()
             number = str(item.get("Number", "") or "").strip()
-            name = str(
-                _first_value(item, ("Name", "DisplayName", "QueueName")) or ""
-            ).strip()
+            name = _string_value(item, ("Name", "DisplayName", "QueueName"))
             agents: list[Any] = []
             for key in _QUEUE_LIST_KEYS:
                 value = item.get(key)
@@ -419,7 +601,9 @@ class ThreeCXApiClient:
                 members.add(identity)
                 if cls._agent_logged_in(agent) is True:
                     logged_in.add(identity)
-            raw_fields = _simple_attributes(item, ("status", "active", "enabled", "logged"))
+            raw_fields = _simple_attributes(
+                item, ("status", "active", "enabled", "logged")
+            )
             queues.append(
                 ThreeCXQueue(
                     queue_id=queue_id,
@@ -430,7 +614,9 @@ class ThreeCXApiClient:
                     raw_fields=tuple(sorted(raw_fields.items())),
                 )
             )
-        return tuple(sorted(queues, key=lambda queue: (queue.number, queue.display_name)))
+        return tuple(
+            sorted(queues, key=lambda queue: (queue.number, queue.display_name))
+        )
 
     @staticmethod
     def _enrich_extensions_with_queues(
@@ -456,6 +642,21 @@ class ThreeCXApiClient:
             )
         return tuple(enriched)
 
+    async def _async_get_group_users(
+        self,
+    ) -> tuple[
+        list[dict[str, Any]], int, str | None, str | None, dict[str, int]
+    ]:
+        errors: list[str] = []
+        for path in XAPI_GROUP_PATHS:
+            try:
+                group_values, pages = await self._async_get_all_odata(path)
+                users, source_counts = self._extract_group_users(group_values)
+                return users, pages, path, None, source_counts
+            except ThreeCXApiError as err:
+                errors.append(f"{path}: {err}")
+        return [], 0, None, " | ".join(errors) if errors else None, {}
+
     async def async_test_connection(self) -> bool:
         await self._async_get(XAPI_DEFS_PATH)
         return True
@@ -463,13 +664,29 @@ class ThreeCXApiClient:
     async def async_get_snapshot(self) -> ThreeCXSnapshot:
         defs, defs_response = await self._async_get(XAPI_DEFS_PATH)
         user_values, pages = await self._async_get_all_odata(XAPI_USERS_PATH)
-        extension_records, skipped_records = self._normalize_extensions(user_values)
+        (
+            group_users,
+            group_pages,
+            group_endpoint,
+            group_error,
+            group_sources,
+        ) = await self._async_get_group_users()
+        merged_users, merge_sources = self._merge_user_values(
+            user_values, group_users
+        )
+        for source, count in group_sources.items():
+            merge_sources[source] = max(merge_sources.get(source, 0), count)
+        extension_records, skipped_records = self._normalize_extensions(
+            merged_users
+        )
 
         queue_records: tuple[ThreeCXQueue, ...] = ()
         queue_pages = 0
         queue_error: str | None = None
         try:
-            queue_values, queue_pages = await self._async_get_all_odata(XAPI_QUEUES_PATH)
+            queue_values, queue_pages = await self._async_get_all_odata(
+                XAPI_QUEUES_PATH
+            )
             queue_records = self._normalize_queues(queue_values)
             extension_records = self._enrich_extensions_with_queues(
                 extension_records, queue_records
@@ -484,9 +701,15 @@ class ThreeCXApiClient:
             or defs_response.headers.get("Server-Version")
         )
         _LOGGER.info(
-            "3CX import: users_received=%s users_imported=%s queues=%s pages=%s/%s",
-            len(user_values), len(extension_records), len(queue_records), pages, queue_pages,
+            "3CX import: users=%s group_users=%s merged=%s imported=%s queues=%s",
+            len(user_values),
+            len(group_users),
+            len(merged_users),
+            len(extension_records),
+            len(queue_records),
         )
+        if group_error:
+            _LOGGER.info("3CX group fallback unavailable: %s", group_error)
         for reason in skipped_records:
             _LOGGER.warning("3CX user skipped: %s", reason)
 
@@ -502,13 +725,20 @@ class ThreeCXApiClient:
             api_users_imported=len(extension_records),
             api_users_skipped=len(skipped_records),
             api_pages=pages,
+            group_pages=group_pages,
+            group_users_found=len(group_users),
+            user_sources=tuple(sorted(merge_sources.items())),
+            group_endpoint=group_endpoint,
+            group_error=group_error,
             queue_pages=queue_pages,
             queues_available=queue_error is None,
             queue_error=queue_error,
             skipped_records=skipped_records,
             raw={
                 "endpoint": self.base_url,
-                "defs_count": len(defs.get("value", [])) if isinstance(defs, dict) else 0,
+                "defs_count": (
+                    len(defs.get("value", [])) if isinstance(defs, dict) else 0
+                ),
                 "active_calls_supported": False,
             },
         )
