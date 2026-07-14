@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from time import monotonic
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 from aiohttp import ClientError, ClientResponse, ClientSession, ClientTimeout
 
@@ -82,6 +83,15 @@ class ThreeCXApiClient:
             return self._host
         return f"https://{self._host}:{self._port}"
 
+    def _request_url(self, path_or_url: str) -> str:
+        """Build a request URL and reject links to another host."""
+        url = urljoin(f"{self.base_url}/", path_or_url)
+        base = urlparse(self.base_url)
+        target = urlparse(url)
+        if (target.scheme, target.netloc) != (base.scheme, base.netloc):
+            raise ThreeCXApiError("3CX returned a URL for another host")
+        return url
+
     async def _raise_for_status(self, response: ClientResponse) -> None:
         if response.status in (401, 403):
             text = await response.text()
@@ -124,18 +134,20 @@ class ThreeCXApiClient:
         self._token_expires_at = monotonic() + max(60, expires_in - 60)
         return self._access_token
 
-    async def _async_get(self, path: str) -> tuple[dict[str, Any], ClientResponse]:
+    async def _async_get(
+        self, path_or_url: str, retry_auth: bool = True
+    ) -> tuple[dict[str, Any], ClientResponse]:
         token = await self.async_authenticate()
         try:
             async with self._session.get(
-                f"{self.base_url}{path}",
+                self._request_url(path_or_url),
                 headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
                 ssl=self._verify_ssl,
                 timeout=ClientTimeout(total=20),
             ) as response:
-                if response.status == 401:
+                if response.status == 401 and retry_auth:
                     await self.async_authenticate(force=True)
-                    return await self._async_get(path)
+                    return await self._async_get(path_or_url, retry_auth=False)
                 await self._raise_for_status(response)
                 payload = await response.json(content_type=None)
                 return payload, response
@@ -143,6 +155,32 @@ class ThreeCXApiClient:
             raise
         except (ClientError, TimeoutError, ValueError) as err:
             raise ThreeCXConnectionError(str(err)) from err
+
+    async def _async_get_all_odata(self, path: str) -> list[Any]:
+        """Read every page of an OData collection."""
+        values: list[Any] = []
+        next_link: str | None = path
+        visited: set[str] = set()
+
+        while next_link:
+            url = self._request_url(next_link)
+            if url in visited:
+                raise ThreeCXApiError("3CX pagination loop detected")
+            if len(visited) >= 100:
+                raise ThreeCXApiError("3CX pagination exceeded 100 pages")
+            visited.add(url)
+
+            payload, _ = await self._async_get(next_link)
+            if not isinstance(payload, dict):
+                break
+            page_values = payload.get("value", [])
+            if isinstance(page_values, list):
+                values.extend(page_values)
+            next_link = payload.get("@odata.nextLink") or payload.get("odata.nextLink")
+            if next_link is not None:
+                next_link = str(next_link)
+
+        return values
 
     @staticmethod
     def _normalize_extensions(values: list[Any]) -> tuple[ThreeCXExtension, ...]:
@@ -173,8 +211,7 @@ class ThreeCXApiClient:
     async def async_get_snapshot(self) -> ThreeCXSnapshot:
         """Fetch a normalized V20 Configuration API snapshot."""
         defs, defs_response = await self._async_get(XAPI_DEFS_PATH)
-        users, _ = await self._async_get(XAPI_USERS_PATH)
-        user_values = users.get("value", []) if isinstance(users, dict) else []
+        user_values = await self._async_get_all_odata(XAPI_USERS_PATH)
         extension_records = self._normalize_extensions(user_values)
         version = (
             defs_response.headers.get("X-3CX-Version")
