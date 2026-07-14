@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import ThreeCXExtension, ThreeCXSnapshot
+from .api import ThreeCXExtension, ThreeCXQueue, ThreeCXSnapshot
 from .const import DOMAIN
 from .coordinator import ThreeCXDataUpdateCoordinator
 
@@ -30,6 +30,24 @@ SENSORS = (
         icon="mdi:phone-classic",
         native_unit_of_measurement="extensions",
         value_fn=lambda data: data.extensions,
+    ),
+    ThreeCXSensorDescription(
+        key="registered_extensions",
+        name="Registrierte Nebenstellen",
+        icon="mdi:phone-check",
+        native_unit_of_measurement="extensions",
+        value_fn=lambda data: sum(
+            1 for record in data.extension_records if record.registered is True
+        ),
+    ),
+    ThreeCXSensorDescription(
+        key="queue_logged_in_agents",
+        name="Angemeldete Warteschleifen-Agenten",
+        icon="mdi:account-multiple-check",
+        native_unit_of_measurement="agents",
+        value_fn=lambda data: sum(
+            1 for record in data.extension_records if record.queue_logged_in
+        ),
     ),
     ThreeCXSensorDescription(
         key="active_calls",
@@ -52,7 +70,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up 3CX sensors and dynamically discover extensions."""
+    """Set up 3CX sensors and dynamically discover extensions and queues."""
     coordinator: ThreeCXDataUpdateCoordinator = entry.runtime_data
     async_add_entities(
         [
@@ -63,19 +81,23 @@ async def async_setup_entry(
     )
 
     known_extension_ids: set[str] = set()
+    known_queue_ids: set[str] = set()
 
     @callback
-    def async_add_new_extensions() -> None:
-        new_records = [
+    def async_add_new_entities() -> None:
+        extension_records = [
             record
             for record in coordinator.data.extension_records
             if record.extension_id not in known_extension_ids
         ]
-        if not new_records:
-            return
-        known_extension_ids.update(record.extension_id for record in new_records)
+        queue_records = [
+            record
+            for record in coordinator.data.queue_records
+            if record.queue_id not in known_queue_ids
+        ]
+
         entities: list[SensorEntity] = []
-        for record in new_records:
+        for record in extension_records:
             entities.extend(
                 (
                     ThreeCXExtensionSensor(coordinator, entry, record.extension_id),
@@ -83,10 +105,22 @@ async def async_setup_entry(
                     ThreeCXQueueStatusSensor(coordinator, entry, record.extension_id),
                 )
             )
-        async_add_entities(entities)
+        for queue in queue_records:
+            entities.extend(
+                (
+                    ThreeCXQueueMemberCountSensor(coordinator, entry, queue.queue_id),
+                    ThreeCXQueueLoggedInCountSensor(coordinator, entry, queue.queue_id),
+                    ThreeCXQueueAgentListSensor(coordinator, entry, queue.queue_id),
+                )
+            )
 
-    async_add_new_extensions()
-    entry.async_on_unload(coordinator.async_add_listener(async_add_new_extensions))
+        known_extension_ids.update(record.extension_id for record in extension_records)
+        known_queue_ids.update(record.queue_id for record in queue_records)
+        if entities:
+            async_add_entities(entities)
+
+    async_add_new_entities()
+    entry.async_on_unload(coordinator.async_add_listener(async_add_new_entities))
 
 
 class ThreeCXSensor(CoordinatorEntity[ThreeCXDataUpdateCoordinator], SensorEntity):
@@ -181,6 +215,7 @@ class ThreeCXQueueOverviewSensor(ThreeCXCentralSensor):
             queues[queue.display_name] = {
                 "number": queue.number,
                 "members": list(queue.members),
+                "member_count": len(queue.members),
                 "logged_in_members": list(queue.logged_in_members),
                 "logged_in_count": len(queue.logged_in_members),
                 **dict(queue.raw_fields),
@@ -323,4 +358,127 @@ class ThreeCXQueueStatusSensor(ThreeCXExtensionEntity, SensorEntity):
             "warteschleifen_mitglied": list(record.queue_names),
             "angemeldet_in": list(record.queue_logged_in_names),
             "an_der_anlage_angemeldet": record.registered,
+        }
+
+
+class ThreeCXQueueEntity(CoordinatorEntity[ThreeCXDataUpdateCoordinator]):
+    """Common base for entities belonging to one queue."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry, queue_id: str) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._queue_id = queue_id
+        record = self._record
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, f"{entry.entry_id}_queue_{queue_id}")},
+            "via_device": (DOMAIN, entry.entry_id),
+            "name": record.display_name if record else f"3CX queue {queue_id}",
+            "manufacturer": "3CX",
+            "model": "V20 Queue",
+        }
+
+    @property
+    def _record(self) -> ThreeCXQueue | None:
+        return next(
+            (
+                record
+                for record in self.coordinator.data.queue_records
+                if record.queue_id == self._queue_id
+            ),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._record is not None
+
+
+class ThreeCXQueueMemberCountSensor(ThreeCXQueueEntity, SensorEntity):
+    """Show the number of configured queue members."""
+
+    _attr_name = "Mitglieder"
+    _attr_icon = "mdi:account-multiple"
+    _attr_native_unit_of_measurement = "agents"
+
+    def __init__(self, coordinator, entry, queue_id: str) -> None:
+        super().__init__(coordinator, entry, queue_id)
+        self._attr_unique_id = f"{entry.entry_id}_queue_members_{queue_id}"
+
+    @property
+    def native_value(self) -> int | None:
+        record = self._record
+        return len(record.members) if record else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        record = self._record
+        if record is None:
+            return {"queue_id": self._queue_id}
+        return {
+            "queue_id": record.queue_id,
+            "number": record.number,
+            "members": list(record.members),
+        }
+
+
+class ThreeCXQueueLoggedInCountSensor(ThreeCXQueueEntity, SensorEntity):
+    """Show the number of agents logged into a queue."""
+
+    _attr_name = "Angemeldete Agenten"
+    _attr_icon = "mdi:account-multiple-check"
+    _attr_native_unit_of_measurement = "agents"
+
+    def __init__(self, coordinator, entry, queue_id: str) -> None:
+        super().__init__(coordinator, entry, queue_id)
+        self._attr_unique_id = f"{entry.entry_id}_queue_logged_in_{queue_id}"
+
+    @property
+    def native_value(self) -> int | None:
+        record = self._record
+        return len(record.logged_in_members) if record else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        record = self._record
+        if record is None:
+            return {"queue_id": self._queue_id}
+        return {
+            "queue_id": record.queue_id,
+            "number": record.number,
+            "logged_in_members": list(record.logged_in_members),
+            "member_count": len(record.members),
+        }
+
+
+class ThreeCXQueueAgentListSensor(ThreeCXQueueEntity, SensorEntity):
+    """Show a compact queue-agent status."""
+
+    _attr_name = "Agentenstatus"
+    _attr_icon = "mdi:account-details"
+
+    def __init__(self, coordinator, entry, queue_id: str) -> None:
+        super().__init__(coordinator, entry, queue_id)
+        self._attr_unique_id = f"{entry.entry_id}_queue_agent_status_{queue_id}"
+
+    @property
+    def native_value(self) -> str | None:
+        record = self._record
+        if record is None:
+            return None
+        return f"{len(record.logged_in_members)}/{len(record.members)} angemeldet"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        record = self._record
+        if record is None:
+            return {"queue_id": self._queue_id}
+        logged_in = set(record.logged_in_members)
+        return {
+            "queue_id": record.queue_id,
+            "number": record.number,
+            "angemeldet": list(record.logged_in_members),
+            "abgemeldet": [member for member in record.members if member not in logged_in],
+            **dict(record.raw_fields),
         }
