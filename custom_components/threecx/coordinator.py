@@ -139,6 +139,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             config_entry=entry,
         )
         self.client = client
+        self.call_control: Any | None = None
 
     async def _async_update_data(self) -> ThreeCXSnapshot:
         try:
