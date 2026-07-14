@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import re
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ThreeCXApiClient
+from .call_control import ThreeCXCallControlClient
 from .const import (
     API_MODE_V20,
+    CALL_CONTROL_WS_PATHS,
     CONF_API_MODE,
     CONF_CLIENT_ID,
     CONF_CLIENT_SECRET,
@@ -17,6 +22,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    EVENT_CALL_CONTROL,
     PLATFORMS,
 )
 from .coordinator import ThreeCXDataUpdateCoordinator
@@ -25,10 +31,17 @@ from .coordinator import ThreeCXDataUpdateCoordinator
 type ThreeCXConfigEntry = ConfigEntry[ThreeCXDataUpdateCoordinator]
 
 
+def _safe_event_name(value: Any) -> str:
+    """Create a stable Home Assistant event suffix from a 3CX event type."""
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "unknown").lower()).strip("_")
+    return normalized[:80] or "unknown"
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> bool:
     """Set up 3CX V20 from a config entry."""
+    session = async_get_clientsession(hass)
     client = ThreeCXApiClient(
-        session=async_get_clientsession(hass),
+        session=session,
         host=entry.data[CONF_HOST],
         port=entry.data.get(CONF_PORT, DEFAULT_PORT),
         client_id=entry.data.get(CONF_CLIENT_ID, ""),
@@ -40,9 +53,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> b
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    async def async_handle_call_control(payload: dict[str, Any]) -> None:
+        """Forward every Call Control frame to Home Assistant's event bus."""
+        event_type = next(
+            (
+                payload.get(key)
+                for key in ("event", "eventType", "type", "name", "action", "state")
+                if payload.get(key) not in (None, "")
+            ),
+            "unknown",
+        )
+        event_data = {
+            "config_entry_id": entry.entry_id,
+            "event_type": str(event_type),
+            "payload": payload,
+        }
+        hass.bus.async_fire(EVENT_CALL_CONTROL, event_data)
+        hass.bus.async_fire(
+            f"{DOMAIN}_{_safe_event_name(event_type)}",
+            event_data,
+        )
+        coordinator.async_update_listeners()
+
+    call_control = ThreeCXCallControlClient(
+        session=session,
+        base_url=client.base_url,
+        verify_ssl=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+        token_provider=client.async_authenticate,
+        candidate_paths=CALL_CONTROL_WS_PATHS,
+        event_callback=async_handle_call_control,
+    )
+    coordinator.call_control = call_control
+    call_control.start()
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> bool:
     """Unload a 3CX config entry."""
+    coordinator = entry.runtime_data
+    if coordinator.call_control is not None:
+        await coordinator.call_control.stop()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
