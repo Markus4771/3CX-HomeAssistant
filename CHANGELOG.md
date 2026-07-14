@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0 – 2026-07-14
+
+- Added a structured in-memory live-state store for Call Control events
+- Merges realtime queue login/logout events into existing queue sensors
+- Merges realtime phone states into extension status attributes
+- Tracks ringing, dialing, connected, held, transferred and ended calls
+- Tracks queue login, queue logout, pause, resume and wrap-up when identifiable
+- Updates the central active-call count from realtime events
+- Preserves raw events while only applying events with safely identifiable users, queues or calls
+- Added counters for applied and ignored realtime events for diagnostics
+
 ## 0.8.2 – 2026-07-14
 
 - Added the combined 3CX Home Assistant project logo and integrated it into the README
