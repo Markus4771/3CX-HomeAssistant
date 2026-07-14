@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 – 2026-07-14
+
+- Fixed queues showing `0/0 angemeldet` although agents were configured
+- Expanded the 3CX V20 `Agents` navigation property in the queue request
+- Queue member and logged-in-agent sensors can now receive the actual agent collection returned by 3CX
+- Kept the OData page limit at 100 with automatic next-link pagination
+
 ## 0.6.0 – 2026-07-14
 
 - Added one Home Assistant device for every 3CX queue
