@@ -40,3 +40,15 @@ XAPI_QUEUES_PATH = (
     f"{XAPI_BASE_PATH}/Queues?$count=true&$top=100&$orderby=Number"
     "&$expand=Agents($expand=User)"
 )
+
+# Call Control is intentionally isolated from Configuration API polling. 3CX
+# builds can expose the realtime websocket at different local paths. Discovery
+# is non-fatal and the first successful path is retained by the client.
+CALL_CONTROL_WS_PATHS = (
+    "/callcontrol/ws",
+    "/callcontrol",
+    "/api/callcontrol/ws",
+)
+EVENT_CALL_CONTROL = f"{DOMAIN}_call_control_event"
+EVENT_CALL_CONTROL_CONNECTED = f"{DOMAIN}_call_control_connected"
+EVENT_CALL_CONTROL_DISCONNECTED = f"{DOMAIN}_call_control_disconnected"
