@@ -22,6 +22,7 @@ API_MODE_LEGACY = "legacy"
 TOKEN_PATH = "/connect/token"
 XAPI_BASE_PATH = "/xapi/v1"
 XAPI_DEFS_PATH = f"{XAPI_BASE_PATH}/Defs?$select=Id"
-# Request complete records because status field names differ between V20 updates.
-XAPI_USERS_PATH = f"{XAPI_BASE_PATH}/Users?$count=true&$top=1000&$orderby=Number"
-XAPI_QUEUES_PATH = f"{XAPI_BASE_PATH}/Queues?$count=true&$top=1000&$orderby=Number"
+# 3CX V20 enforces a maximum OData $top value of 100. Further records are
+# retrieved through the existing @odata.nextLink pagination support.
+XAPI_USERS_PATH = f"{XAPI_BASE_PATH}/Users?$count=true&$top=100&$orderby=Number"
+XAPI_QUEUES_PATH = f"{XAPI_BASE_PATH}/Queues?$count=true&$top=100&$orderby=Number"
