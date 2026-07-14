@@ -25,4 +25,8 @@ XAPI_DEFS_PATH = f"{XAPI_BASE_PATH}/Defs?$select=Id"
 # 3CX V20 enforces a maximum OData $top value of 100. Further records are
 # retrieved through the existing @odata.nextLink pagination support.
 XAPI_USERS_PATH = f"{XAPI_BASE_PATH}/Users?$count=true&$top=100&$orderby=Number"
-XAPI_QUEUES_PATH = f"{XAPI_BASE_PATH}/Queues?$count=true&$top=100&$orderby=Number"
+# Queue agents are a navigation property and are not included in the normal
+# Queues response. Explicit expansion is required for membership/login sensors.
+XAPI_QUEUES_PATH = (
+    f"{XAPI_BASE_PATH}/Queues?$count=true&$top=100&$orderby=Number&$expand=Agents"
+)
