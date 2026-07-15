@@ -26,6 +26,7 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import ThreeCXDataUpdateCoordinator
+from .deep_call_control_analyzer import DeepCallControlAnalyzer
 from .live_queue_runtime import apply_live_queue_policy
 from .queue_compare_runtime import apply_queue_compare_runtime
 
@@ -53,12 +54,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> b
         api_mode=entry.data.get(CONF_API_MODE, API_MODE_V20),
     )
     coordinator = ThreeCXDataUpdateCoordinator(hass, entry, client)
+    analyzer = DeepCallControlAnalyzer(limit=200)
+    coordinator.deep_call_control_analyzer = analyzer
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def async_handle_call_control(payload: dict[str, Any]) -> None:
-        """Apply and forward raw and normalized Call Control frames."""
+        """Record, apply and forward raw and normalized Call Control frames."""
+        analyzer.record(payload)
         normalized = payload.get("_threecx_normalized", {})
         if not isinstance(normalized, dict):
             normalized = {}
