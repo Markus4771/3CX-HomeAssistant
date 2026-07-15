@@ -50,13 +50,31 @@ XAPI_QUEUE_AGENT_PATH_TEMPLATES = (
     f"{XAPI_BASE_PATH}/Queues/{{queue_id}}/Agents",
 )
 
-# Call Control is intentionally isolated from Configuration API polling. 3CX
-# builds can expose the realtime websocket at different local paths. Discovery
-# is non-fatal and the first successful path is retained by the client.
+# Call Control remains isolated from Configuration API polling. The discovery
+# engine keeps every successful websocket open and selects the first channel
+# that actually emits frames. Both bearer-header and access_token-query
+# authentication are tested for each path.
 CALL_CONTROL_WS_PATHS = (
     "/callcontrol/ws",
     "/callcontrol",
     "/api/callcontrol/ws",
+    "/api/callcontrol",
+    "/call-control/ws",
+    "/call-control",
+    "/api/call-control/ws",
+    "/api/call-control",
+    "/events/ws",
+    "/eventstream/ws",
+    "/event-stream/ws",
+    "/api/events/ws",
+    "/api/eventstream/ws",
+    "/api/event-stream/ws",
+    "/signalr",
+    "/signalr/connect",
+    "/hubs/callcontrol",
+    "/hub/callcontrol",
+    "/ws/callcontrol",
+    "/websocket/callcontrol",
 )
 EVENT_CALL_CONTROL = f"{DOMAIN}_call_control_event"
 EVENT_CALL_CONTROL_CONNECTED = f"{DOMAIN}_call_control_connected"
