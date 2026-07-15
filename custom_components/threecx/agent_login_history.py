@@ -1,4 +1,4 @@
-"""Reconstruct current queue logins from the 3CX AgentLoginHistory report function."""
+"""Reconstruct current queue logins from the 3CX AgentLoginHistory report."""
 
 from __future__ import annotations
 
@@ -12,12 +12,19 @@ from .api import ThreeCXApiClient, ThreeCXApiError, ThreeCXSnapshot
 
 _LOGGER = logging.getLogger(__name__)
 
-_LOGIN_WORDS = ("login", "loggedin", "logged in", "signin", "signedin", "signed in")
-_LOGOUT_WORDS = ("logout", "loggedout", "logged out", "signout", "signedout", "signed out")
+_LOGIN_WORDS = ("login", "loggedin", "signin", "signedin")
+_LOGOUT_WORDS = ("logout", "loggedout", "signout", "signedout")
 
 
 def _normalized(value: Any) -> str:
-    return str(value or "").strip().casefold().replace("_", "").replace("-", "").replace(" ", "")
+    return (
+        str(value or "")
+        .strip()
+        .casefold()
+        .replace("_", "")
+        .replace("-", "")
+        .replace(" ", "")
+    )
 
 
 def _flatten(value: Any, prefix: str = "", depth: int = 0) -> dict[str, Any]:
@@ -50,22 +57,26 @@ def _parse_datetime(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _event_from_row(flat: dict[str, Any]) -> tuple[bool | None, datetime | None, str | None]:
-    """Return logged-in state, timestamp and source field from one report row."""
-    direct: list[tuple[bool, str]] = []
+def _event_from_row(
+    flat: dict[str, Any],
+) -> tuple[bool | None, datetime | None, str | None, datetime | None, datetime | None]:
+    """Return state, effective time, source, last login and last logout."""
     login_times: list[tuple[datetime, str]] = []
     logout_times: list[tuple[datetime, str]] = []
+    direct: list[tuple[bool, str]] = []
 
     for path, raw in flat.items():
         key = _normalized(path.rsplit(".", 1)[-1].split("[", 1)[0])
-        text = str(raw or "").strip().casefold()
+        text = _normalized(raw)
         stamp = _parse_datetime(raw)
+
         if stamp is not None:
-            if "login" in key or "signin" in key:
+            if any(word in key for word in _LOGIN_WORDS):
                 login_times.append((stamp, path))
-            if "logout" in key or "signout" in key:
+            if any(word in key for word in _LOGOUT_WORDS):
                 logout_times.append((stamp, path))
             continue
+
         if any(part in key for part in ("status", "state", "action", "event", "type", "operation")):
             if any(word in text for word in _LOGOUT_WORDS):
                 direct.append((False, path))
@@ -74,25 +85,30 @@ def _event_from_row(flat: dict[str, Any]) -> tuple[bool | None, datetime | None,
         if isinstance(raw, bool) and any(part in key for part in ("login", "logged", "active")):
             direct.append((raw, path))
 
-    if login_times or logout_times:
-        minimum = datetime.min.replace(tzinfo=timezone.utc)
-        latest_login = max(login_times, default=(minimum, ""))
-        latest_logout = max(logout_times, default=(minimum, ""))
-        if latest_login[0] > latest_logout[0]:
-            return True, latest_login[0], latest_login[1]
-        if latest_logout[0] > minimum:
-            return False, latest_logout[0], latest_logout[1]
+    minimum = datetime.min.replace(tzinfo=timezone.utc)
+    latest_login = max(login_times, default=(minimum, ""))
+    latest_logout = max(logout_times, default=(minimum, ""))
+    last_login = latest_login[0] if latest_login[0] > minimum else None
+    last_logout = latest_logout[0] if latest_logout[0] > minimum else None
+
+    # A report row describes one login session. An empty logout means that the
+    # session is still open. If both timestamps exist, the later event wins.
+    if last_login is not None and (last_logout is None or last_login > last_logout):
+        return True, last_login, latest_login[1], last_login, last_logout
+    if last_logout is not None:
+        return False, last_logout, latest_logout[1], last_login, last_logout
 
     if direct:
         state, source = direct[-1]
-        timestamps = [
+        generic = [
             _parse_datetime(raw)
             for field, raw in flat.items()
             if any(part in _normalized(field) for part in ("time", "date", "timestamp", "created", "changed"))
         ]
-        valid = [stamp for stamp in timestamps if stamp is not None]
-        return state, max(valid) if valid else None, source
-    return None, None, None
+        valid = [stamp for stamp in generic if stamp is not None]
+        return state, max(valid) if valid else None, source, last_login, last_logout
+
+    return None, None, None, last_login, last_logout
 
 
 def _function_paths(
@@ -101,27 +117,18 @@ def _function_paths(
     start: datetime,
     end: datetime,
 ) -> tuple[str, ...]:
-    """Build read-only report calls accepted by different V20 builds."""
     start_text = start.isoformat(timespec="seconds").replace("+00:00", "Z")
     end_text = end.isoformat(timespec="seconds").replace("+00:00", "Z")
     queue_value = queue_number.replace("'", "''")
     agent_value = agent_number.replace("'", "''")
-    timezone_value = "UTC"
-    parameter_orders = (
-        (
-            f"clientTimeZone='{timezone_value}',startDt={start_text},endDt={end_text},"
-            f"queueDnStr='{queue_value}',agentDnStr='{agent_value}'"
-        ),
-        (
-            f"startDt={start_text},endDt={end_text},queueDnStr='{queue_value}',"
-            f"agentDnStr='{agent_value}',clientTimeZone='{timezone_value}'"
-        ),
+    orders = (
+        f"clientTimeZone='UTC',startDt={start_text},endDt={end_text},queueDnStr='{queue_value}',agentDnStr='{agent_value}'",
+        f"startDt={start_text},endDt={end_text},queueDnStr='{queue_value}',agentDnStr='{agent_value}',clientTimeZone='UTC'",
     )
-    roots = ("ReportAgentLoginHistory", "AgentLoginHistory")
     paths: list[str] = []
-    for root in roots:
+    for root in ("ReportAgentLoginHistory", "AgentLoginHistory"):
         for namespace in ("Pbx.", ""):
-            for parameters in parameter_orders:
+            for parameters in orders:
                 raw = f"/xapi/v1/{root}/{namespace}GetAgentLoginHistoryData({parameters})?$top=100"
                 paths.append(quote(raw, safe="/:?$=(),'._-+"))
     return tuple(dict.fromkeys(paths))
@@ -147,10 +154,11 @@ async def async_apply_agent_login_history(
     client: ThreeCXApiClient,
     snapshot: ThreeCXSnapshot,
 ) -> tuple[ThreeCXSnapshot, dict[str, Any]]:
-    """Apply the newest report decision for every known queue member."""
+    """Apply the newest reconstructed queue state for every known member."""
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=30)
     diagnostics: dict[str, Any] = {
+        "engine_version": 2,
         "available": False,
         "window_days": 30,
         "client_time_zone": "UTC",
@@ -163,7 +171,7 @@ async def async_apply_agent_login_history(
         "successful_queries": 0,
         "failed_queries": 0,
     }
-    decisions: dict[tuple[str, str], tuple[datetime, bool, str]] = {}
+    decisions: dict[tuple[str, str], dict[str, Any]] = {}
 
     for queue in snapshot.queue_records:
         members = _queue_extensions(snapshot, queue)
@@ -175,21 +183,23 @@ async def async_apply_agent_login_history(
             "agents": {},
         }
         for extension in members:
+            agent_key = extension.number or extension.extension_id
             agent_diag: dict[str, Any] = {
                 "number": extension.number,
                 "selected_endpoint": None,
                 "rows": 0,
                 "matched_rows": 0,
                 "field_names": [],
+                "last_login": None,
+                "last_logout": None,
+                "last_event": None,
+                "last_event_time": None,
+                "derived_state": "unknown",
+                "confidence": 0,
                 "errors": [],
             }
             values: list[Any] = []
-            for path in _function_paths(
-                queue.number or queue.queue_id,
-                extension.number or extension.extension_id,
-                start,
-                now,
-            ):
+            for path in _function_paths(queue.number or queue.queue_id, agent_key, start, now):
                 try:
                     values, _pages = await client._async_get_all_odata(path)  # noqa: SLF001
                     agent_diag["selected_endpoint"] = path
@@ -211,27 +221,39 @@ async def async_apply_agent_login_history(
                     continue
                 flat = _flatten(row)
                 fields.update(flat)
-                state, timestamp, source_field = _event_from_row(flat)
-                if state is None:
+                state, timestamp, source, row_login, row_logout = _event_from_row(flat)
+                if row_login and (agent_diag["last_login"] is None or row_login.isoformat() > agent_diag["last_login"]):
+                    agent_diag["last_login"] = row_login.isoformat()
+                if row_logout and (agent_diag["last_logout"] is None or row_logout.isoformat() > agent_diag["last_logout"]):
+                    agent_diag["last_logout"] = row_logout.isoformat()
+                if state is None or timestamp is None:
                     diagnostics["unmatched_rows"] += 1
                     continue
-                effective_time = timestamp or start
+
                 key = (queue.queue_id, extension.extension_id)
                 previous = decisions.get(key)
-                if previous is None or effective_time >= previous[0]:
-                    decisions[key] = (effective_time, state, source_field or "unknown")
+                if previous is None or timestamp >= previous["at"]:
+                    decisions[key] = {
+                        "at": timestamp,
+                        "logged_in": state,
+                        "source_field": source or "unknown",
+                    }
                 agent_diag["matched_rows"] += 1
                 queue_diag["matched_rows"] += 1
                 diagnostics["matched_rows"] += 1
 
+            decision = decisions.get((queue.queue_id, extension.extension_id))
+            if decision:
+                agent_diag["last_event"] = "login" if decision["logged_in"] else "logout"
+                agent_diag["last_event_time"] = decision["at"].isoformat()
+                agent_diag["derived_state"] = "logged_in" if decision["logged_in"] else "logged_out"
+                agent_diag["confidence"] = 100
             agent_diag["field_names"] = sorted(fields)
             agent_diag["errors"] = agent_diag["errors"][-4:]
-            queue_diag["agents"][extension.number or extension.extension_id] = agent_diag
+            queue_diag["agents"][agent_key] = agent_diag
         diagnostics["queues"][queue.display_name] = queue_diag
 
-    logged_by_queue = {
-        queue.queue_id: set(queue.logged_in_members) for queue in snapshot.queue_records
-    }
+    logged_by_queue = {queue.queue_id: set(queue.logged_in_members) for queue in snapshot.queue_records}
     extension_queue_names = {
         extension.extension_id: set(extension.queue_logged_in_names)
         for extension in snapshot.extension_records
@@ -239,22 +261,23 @@ async def async_apply_agent_login_history(
     queues_by_id = {queue.queue_id: queue for queue in snapshot.queue_records}
     extensions_by_id = {extension.extension_id: extension for extension in snapshot.extension_records}
 
-    for (queue_id, extension_id), (timestamp, state, source_field) in decisions.items():
+    for (queue_id, extension_id), decision in decisions.items():
         queue = queues_by_id.get(queue_id)
         extension = extensions_by_id.get(extension_id)
         if queue is None or extension is None:
             continue
         identity = extension.number or extension.extension_id
-        if state:
+        if decision["logged_in"]:
             logged_by_queue[queue_id].add(identity)
             extension_queue_names[extension_id].add(queue.display_name)
         else:
             logged_by_queue[queue_id].discard(identity)
             extension_queue_names[extension_id].discard(queue.display_name)
         diagnostics["decisions"][f"{queue.number}:{extension.number}"] = {
-            "logged_in": state,
-            "at": timestamp.isoformat(),
-            "source_field": source_field,
+            "logged_in": decision["logged_in"],
+            "at": decision["at"].isoformat(),
+            "source_field": decision["source_field"],
+            "confidence": 100,
         }
 
     snapshot.queue_records = tuple(
@@ -269,7 +292,7 @@ async def async_apply_agent_login_history(
         for extension in snapshot.extension_records
     )
     _LOGGER.info(
-        "3CX AgentLoginHistory per member: available=%s queries=%s matched=%s decisions=%s",
+        "3CX Queue Engine 2.0: available=%s queries=%s matched=%s decisions=%s",
         diagnostics["available"],
         diagnostics["successful_queries"],
         diagnostics["matched_rows"],
