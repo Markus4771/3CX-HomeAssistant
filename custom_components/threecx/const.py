@@ -3,7 +3,7 @@
 from datetime import timedelta
 
 DOMAIN = "threecx"
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = ["sensor", "binary_sensor", "button"]
 
 CONF_VERIFY_SSL = "verify_ssl"
 CONF_API_MODE = "api_mode"
