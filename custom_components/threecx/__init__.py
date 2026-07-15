@@ -12,6 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import ThreeCXApiClient
 from .call_control import ThreeCXCallControlClient
+from .call_control_handshake import apply_call_control_handshake_discovery
 from .const import (
     API_MODE_V20,
     CALL_CONTROL_WS_PATHS,
@@ -43,6 +44,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> b
     """Set up 3CX V20 from a config entry."""
     apply_live_queue_policy()
     apply_queue_compare_runtime()
+    apply_call_control_handshake_discovery()
     session = async_get_clientsession(hass)
     client = ThreeCXApiClient(
         session=session,
