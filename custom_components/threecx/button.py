@@ -17,13 +17,14 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up queue comparator buttons."""
+    """Set up queue comparator buttons on the central 3CX device."""
     coordinator: ThreeCXDataUpdateCoordinator = entry.runtime_data
     async_add_entities(
         [
             ThreeCXQueueCaptureButton(coordinator, entry, "logged_in"),
             ThreeCXQueueCaptureButton(coordinator, entry, "logged_out"),
-        ]
+        ],
+        update_before_add=False,
     )
 
 
@@ -33,23 +34,31 @@ class ThreeCXQueueCaptureButton(
     """Capture the raw queue API state for one known login condition."""
 
     _attr_has_entity_name = True
+    _attr_entity_registry_enabled_default = True
+    _attr_should_poll = False
 
     def __init__(self, coordinator, entry, label: str) -> None:
         super().__init__(coordinator)
         self._label = label
         self._attr_unique_id = f"{entry.entry_id}_queue_compare_{label}"
         self._attr_name = (
-            "Queue-Vergleich aufnehmen: angemeldet"
+            "Queue-Vergleich: angemeldet aufnehmen"
             if label == "logged_in"
-            else "Queue-Vergleich aufnehmen: abgemeldet"
+            else "Queue-Vergleich: abgemeldet aufnehmen"
         )
         self._attr_icon = "mdi:camera-marker"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": entry.title,
             "manufacturer": "3CX",
-            "model": "Phone System",
+            "model": "Phone System V20",
         }
 
+    @property
+    def available(self) -> bool:
+        """Return whether a current 3CX snapshot is available."""
+        return self.coordinator.data is not None
+
     async def async_press(self) -> None:
+        """Capture the selected comparison state and refresh diagnostics."""
         await self.coordinator.async_capture_queue_compare(self._label)
