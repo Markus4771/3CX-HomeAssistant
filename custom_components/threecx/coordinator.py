@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .agent_engine import apply_agent_engine
+from .agent_login_history import async_apply_agent_login_history
 from .api import ThreeCXApiClient, ThreeCXApiError, ThreeCXSnapshot
 from .central_queue_status import async_poll_central_queue_status
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
@@ -146,6 +147,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.odata_metadata: dict[str, Any] = {}
         self.entity_set_status_diagnostics: dict[str, Any] = {}
         self.central_queue_status_diagnostics: dict[str, Any] = {}
+        self.agent_login_history_diagnostics: dict[str, Any] = {}
         self.queue_endpoint_diagnostics: dict[str, Any] = {}
         self.agent_engine_diagnostics: dict[str, Any] = {}
         self.state_engine_diagnostics: dict[str, Any] = {}
@@ -217,6 +219,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             "timeline": list(self.event_history[-25:]),
             "agent_engine": self.agent_engine_diagnostics,
             "central_queue_status": self.central_queue_status_diagnostics,
+            "agent_login_history": self.agent_login_history_diagnostics,
             "queue_endpoint_diagnostics": self.queue_endpoint_diagnostics,
             "live_state": self.live_state.diagnostics(),
         }
@@ -245,6 +248,12 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             )
             self.central_queue_status_diagnostics = central_diagnostics
 
+            snapshot, history_diagnostics = await async_apply_agent_login_history(
+                self.client,
+                snapshot,
+            )
+            self.agent_login_history_diagnostics = history_diagnostics
+
             self.queue_endpoint_diagnostics = await async_run_queue_endpoint_diagnostics(
                 self.client,
                 snapshot,
@@ -254,6 +263,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             diagnostics["_odata_metadata"] = self.odata_metadata
             diagnostics["_entity_set_status"] = entity_set_diagnostics
             diagnostics["_central_queue_status"] = central_diagnostics
+            diagnostics["_agent_login_history"] = history_diagnostics
             diagnostics["_queue_endpoint_diagnostics"] = self.queue_endpoint_diagnostics
             self.queue_agent_diagnostics = diagnostics
 
