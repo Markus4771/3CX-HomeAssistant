@@ -27,6 +27,7 @@ from .const import (
 )
 from .coordinator import ThreeCXDataUpdateCoordinator
 from .live_queue_runtime import apply_live_queue_policy
+from .queue_compare_runtime import apply_queue_compare_runtime
 
 
 type ThreeCXConfigEntry = ConfigEntry[ThreeCXDataUpdateCoordinator]
@@ -40,6 +41,7 @@ def _safe_event_name(value: Any) -> str:
 async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> bool:
     """Set up 3CX V20 from a config entry."""
     apply_live_queue_policy()
+    apply_queue_compare_runtime()
     session = async_get_clientsession(hass)
     client = ThreeCXApiClient(
         session=session,
