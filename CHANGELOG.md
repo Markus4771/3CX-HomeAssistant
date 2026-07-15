@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.16 – 2026-07-15
+
+- Added an exhaustive read-only queue endpoint explorer
+- Probes queue membership, logged-in-agent, active-agent and status endpoint variants per queue
+- Records success, HTTP status, row count and nested field names for every tested endpoint
+- Exposes metadata-advertised queue and agent entity sets with anonymized sample structures
+- Adds `queue_endpoint_diagnostics` to the central 3CX Agent Engine Monitor
+- Keeps endpoint failures isolated so diagnostics never make the integration unavailable
+
 ## 0.9.13 – 2026-07-14
 
 - Added a central Agent Engine as the single merged model for users, queues and active calls
