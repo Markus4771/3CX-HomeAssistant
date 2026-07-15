@@ -1,4 +1,4 @@
-"""Discover and probe queue- and agent-related 3CX OData entity sets."""
+"""Discover and probe queue- and agent-related 3CX OData metadata."""
 
 from __future__ import annotations
 
@@ -9,23 +9,10 @@ from xml.etree import ElementTree
 
 from aiohttp import ClientError, ClientTimeout
 
-
-_SAFE_ENTITY_SET = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SAFE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 _STATUS_PARTS = (
-    "login",
-    "logged",
-    "status",
-    "state",
-    "active",
-    "available",
-    "pause",
-    "wrap",
-    "queue",
-    "agent",
-    "user",
-    "extension",
-    "number",
-    "dn",
+    "login", "logged", "status", "state", "active", "available", "pause",
+    "wrap", "queue", "agent", "user", "extension", "number", "dn",
 )
 
 
@@ -34,7 +21,6 @@ def _local_name(tag: str) -> str:
 
 
 def _flatten(value: Any, prefix: str = "", depth: int = 0) -> dict[str, Any]:
-    """Flatten a small response row for field-path diagnostics."""
     if depth > 6:
         return {}
     result: dict[str, Any] = {}
@@ -52,7 +38,6 @@ def _flatten(value: Any, prefix: str = "", depth: int = 0) -> dict[str, Any]:
 
 
 def _interesting_fields(values: list[Any]) -> tuple[list[str], list[str]]:
-    """Return all and status-related field paths without exposing record values."""
     fields: set[str] = set()
     status_fields: set[str] = set()
     for value in values[:5]:
@@ -67,7 +52,6 @@ def _interesting_fields(values: list[Any]) -> tuple[list[str], list[str]]:
 
 
 def _fingerprint(value: Any) -> str | None:
-    """Create a stable, non-reversible short fingerprint for diagnostic matching."""
     if value in (None, ""):
         return None
     text = str(value).strip().casefold()
@@ -75,7 +59,6 @@ def _fingerprint(value: Any) -> str | None:
 
 
 def _anonymized_samples(values: list[Any]) -> list[dict[str, Any]]:
-    """Return field paths and fingerprints for up to five rows, never raw identities."""
     samples: list[dict[str, Any]] = []
     for index, value in enumerate(values[:5]):
         if not isinstance(value, dict):
@@ -91,57 +74,98 @@ def _anonymized_samples(values: list[Any]) -> list[dict[str, Any]]:
                 part in final
                 for part in ("status", "state", "login", "logged", "active", "available", "pause", "wrap")
             )
-            interesting[path] = raw if is_status_value and isinstance(raw, (bool, int, float)) else _fingerprint(raw)
-        samples.append(
-            {
-                "row": index + 1,
-                "field_count": len(flat),
-                "candidate_fields": interesting,
-            }
-        )
+            interesting[path] = (
+                raw if is_status_value and isinstance(raw, (bool, int, float))
+                else _fingerprint(raw)
+            )
+        samples.append({"row": index + 1, "field_count": len(flat), "candidate_fields": interesting})
     return samples
 
 
-async def _async_probe_entity_sets(
-    client: Any, entity_sets: list[str]
-) -> dict[str, dict[str, Any]]:
-    """Probe metadata-advertised sets with a small, read-only OData query."""
-    probes: dict[str, dict[str, Any]] = {}
-    for name in entity_sets[:20]:
-        if not _SAFE_ENTITY_SET.fullmatch(name):
-            probes[name] = {
-                "success": False,
-                "error": "Unsicherer Entity-Set-Name aus Metadaten verworfen",
-            }
-            continue
-        path = f"/xapi/v1/{name}?$top=5"
-        try:
-            payload, response = await client._async_get(path)  # noqa: SLF001
-            values = payload.get("value", []) if isinstance(payload, dict) else []
+async def _probe_get(client: Any, path: str) -> dict[str, Any]:
+    try:
+        payload, response = await client._async_get(path)  # noqa: SLF001
+        if isinstance(payload, dict):
+            values = payload.get("value", [])
             if not isinstance(values, list):
-                values = []
-            fields, status_fields = _interesting_fields(values)
-            probes[name] = {
-                "success": True,
-                "endpoint": path,
-                "http_status": response.status,
-                "sample_count": len(values),
-                "field_names": fields,
-                "status_field_names": status_fields,
-                "anonymized_samples": _anonymized_samples(values),
-                "privacy_note": "Identitaeten werden nur als SHA-256-Kurzfingerabdruck ausgegeben.",
-            }
-        except Exception as err:  # Probe failures must never break the integration.
-            probes[name] = {
-                "success": False,
-                "endpoint": path,
-                "error": str(err)[:500],
-            }
+                values = [payload]
+        elif isinstance(payload, list):
+            values = payload
+        else:
+            values = []
+        fields, status_fields = _interesting_fields(values)
+        return {
+            "success": True,
+            "endpoint": path,
+            "http_status": response.status,
+            "sample_count": len(values),
+            "field_names": fields,
+            "status_field_names": status_fields,
+            "anonymized_samples": _anonymized_samples(values),
+            "error": None,
+        }
+    except Exception as err:  # Diagnostic probes must never break the integration.
+        return {
+            "success": False,
+            "endpoint": path,
+            "http_status": None,
+            "sample_count": 0,
+            "field_names": [],
+            "status_field_names": [],
+            "anonymized_samples": [],
+            "error": str(err)[:500],
+        }
+
+
+async def _async_probe_entity_sets(client: Any, entity_sets: list[str]) -> dict[str, dict[str, Any]]:
+    probes: dict[str, dict[str, Any]] = {}
+    for name in entity_sets[:30]:
+        if not _SAFE_NAME.fullmatch(name):
+            probes[name] = {"success": False, "error": "Unsicherer Entity-Set-Name verworfen"}
+            continue
+        probes[name] = await _probe_get(client, f"/xapi/v1/{name}?$top=5")
     return probes
 
 
+def _operation_parameters(element: ElementTree.Element) -> list[dict[str, Any]]:
+    parameters: list[dict[str, Any]] = []
+    for child in element:
+        if _local_name(child.tag) != "Parameter":
+            continue
+        parameters.append({
+            "name": str(child.attrib.get("Name", "")),
+            "type": str(child.attrib.get("Type", "")),
+            "nullable": str(child.attrib.get("Nullable", "true")).lower() != "false",
+        })
+    return parameters
+
+
+async def _probe_function_imports(client: Any, imports: list[dict[str, Any]]) -> dict[str, Any]:
+    results: dict[str, Any] = {}
+    for operation in imports[:30]:
+        name = operation.get("name", "")
+        if not _SAFE_NAME.fullmatch(name):
+            continue
+        parameters = operation.get("parameters", [])
+        required = [p for p in parameters if not p.get("nullable", True)]
+        if required:
+            results[name] = {
+                "tested": False,
+                "reason": "Pflichtparameter vorhanden",
+                "parameters": parameters,
+            }
+            continue
+        # OData functions are side-effect free and may be called with GET.
+        results[name] = {
+            "tested": True,
+            **await _probe_get(client, f"/xapi/v1/{name}()"),
+            "parameters": parameters,
+        }
+    return results
+
+
 async def async_discover_queue_agent_metadata(client: Any) -> dict[str, Any]:
-    """Read PBX-published OData metadata and probe relevant entity sets."""
+    """Read PBX-published metadata and safely probe read-only operations."""
     path = "/xapi/v1/$metadata"
     result: dict[str, Any] = {
         "endpoint": path,
@@ -149,18 +173,20 @@ async def async_discover_queue_agent_metadata(client: Any) -> dict[str, Any]:
         "entity_sets": [],
         "entity_types": [],
         "navigation_properties": [],
+        "functions": [],
+        "actions": [],
+        "function_imports": [],
+        "action_imports": [],
+        "function_import_probes": {},
         "entity_set_probes": {},
         "error": None,
     }
     try:
         token = await client.async_authenticate()
         url = f"{client.base_url}{path}"
-        async with client._session.get(  # noqa: SLF001 - integration-internal helper
+        async with client._session.get(  # noqa: SLF001
             url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/xml, text/xml, */*",
-            },
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/xml, text/xml, */*"},
             ssl=client._verify_ssl,  # noqa: SLF001
             timeout=ClientTimeout(total=20),
         ) as response:
@@ -181,13 +207,19 @@ async def async_discover_queue_agent_metadata(client: Any) -> dict[str, Any]:
     entity_sets: set[str] = set()
     entity_types: set[str] = set()
     navigation: set[str] = set()
-    keywords = ("queue", "agent")
+    functions: list[dict[str, Any]] = []
+    actions: list[dict[str, Any]] = []
+    function_imports: list[dict[str, Any]] = []
+    action_imports: list[dict[str, Any]] = []
+    keywords = ("queue", "agent", "login", "logged", "presence")
 
+    operation_defs: dict[str, dict[str, Any]] = {}
     for element in root.iter():
         kind = _local_name(element.tag)
         name = str(element.attrib.get("Name", ""))
         entity_type = str(element.attrib.get("EntityType", ""))
-        target = f"{name} {entity_type}".lower()
+        operation_ref = str(element.attrib.get("Function", "") or element.attrib.get("Action", ""))
+        target = f"{name} {entity_type} {operation_ref}".lower()
         if not any(keyword in target for keyword in keywords):
             continue
         if kind == "EntitySet" and name:
@@ -196,16 +228,36 @@ async def async_discover_queue_agent_metadata(client: Any) -> dict[str, Any]:
             entity_types.add(name)
         elif kind == "NavigationProperty" and name:
             navigation.add(name)
+        elif kind in {"Function", "Action"} and name:
+            item = {
+                "name": name,
+                "is_bound": str(element.attrib.get("IsBound", "false")).lower() == "true",
+                "parameters": _operation_parameters(element),
+            }
+            operation_defs[name] = item
+            (functions if kind == "Function" else actions).append(item)
+        elif kind in {"FunctionImport", "ActionImport"} and name:
+            ref = operation_ref.rsplit(".", 1)[-1]
+            item = {
+                "name": name,
+                "operation": operation_ref,
+                "parameters": operation_defs.get(ref, {}).get("parameters", []),
+            }
+            (function_imports if kind == "FunctionImport" else action_imports).append(item)
 
     sorted_sets = sorted(entity_sets)
-    result.update(
-        {
-            "available": True,
-            "entity_sets": sorted_sets,
-            "entity_types": sorted(entity_types),
-            "navigation_properties": sorted(navigation),
-            "metadata_size": len(text),
-            "entity_set_probes": await _async_probe_entity_sets(client, sorted_sets),
-        }
-    )
+    result.update({
+        "available": True,
+        "entity_sets": sorted_sets,
+        "entity_types": sorted(entity_types),
+        "navigation_properties": sorted(navigation),
+        "functions": functions,
+        "actions": actions,
+        "function_imports": function_imports,
+        "action_imports": action_imports,
+        "metadata_size": len(text),
+        "entity_set_probes": await _async_probe_entity_sets(client, sorted_sets),
+        "function_import_probes": await _probe_function_imports(client, function_imports),
+        "safety_note": "Nur parameterlose OData Functions werden per GET getestet; Actions werden niemals ausgefuehrt.",
+    })
     return result
