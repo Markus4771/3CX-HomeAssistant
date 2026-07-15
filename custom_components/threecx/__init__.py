@@ -10,7 +10,6 @@ from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .agent_login_history_patch import apply_patch
 from .api import ThreeCXApiClient
 from .call_control import ThreeCXCallControlClient
 from .const import (
@@ -39,7 +38,6 @@ def _safe_event_name(value: Any) -> str:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ThreeCXConfigEntry) -> bool:
     """Set up 3CX V20 from a config entry."""
-    apply_patch()
     session = async_get_clientsession(hass)
     client = ThreeCXApiClient(
         session=session,
