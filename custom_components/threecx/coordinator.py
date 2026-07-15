@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .agent_engine import apply_agent_engine
 from .api import ThreeCXApiClient, ThreeCXApiError, ThreeCXSnapshot
+from .central_queue_status import async_poll_central_queue_status
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 from .entity_set_status import async_apply_entity_set_status
 from .live_state import ThreeCXLiveState
@@ -143,8 +144,8 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.queue_agent_diagnostics: dict[str, Any] = {}
         self.odata_metadata: dict[str, Any] = {}
         self.entity_set_status_diagnostics: dict[str, Any] = {}
+        self.central_queue_status_diagnostics: dict[str, Any] = {}
         self.agent_engine_diagnostics: dict[str, Any] = {}
-        # Compatibility alias for entities created by 0.9.12.
         self.state_engine_diagnostics: dict[str, Any] = {}
         self.live_state = ThreeCXLiveState()
         self.event_history: list[dict[str, Any]] = []
@@ -213,6 +214,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             "last_event": self.event_history[-1] if self.event_history else None,
             "timeline": list(self.event_history[-25:]),
             "agent_engine": self.agent_engine_diagnostics,
+            "central_queue_status": self.central_queue_status_diagnostics,
             "live_state": self.live_state.diagnostics(),
         }
 
@@ -232,9 +234,19 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
                 self.odata_metadata,
             )
             self.entity_set_status_diagnostics = entity_set_diagnostics
+
+            snapshot, central_diagnostics = await async_poll_central_queue_status(
+                self.client,
+                snapshot,
+                self.odata_metadata,
+            )
+            self.central_queue_status_diagnostics = central_diagnostics
+
             diagnostics["_odata_metadata"] = self.odata_metadata
             diagnostics["_entity_set_status"] = entity_set_diagnostics
+            diagnostics["_central_queue_status"] = central_diagnostics
             self.queue_agent_diagnostics = diagnostics
+
             snapshot.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
                 snapshot.extension_records,
                 snapshot.queue_records,
