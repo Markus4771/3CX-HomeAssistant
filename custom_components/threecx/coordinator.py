@@ -19,6 +19,7 @@ from .entity_set_status import async_apply_entity_set_status
 from .live_state import ThreeCXLiveState
 from .metadata_explorer import async_discover_queue_agent_metadata
 from .queue_agents import async_enrich_queue_agents
+from .queue_endpoint_diagnostics import async_run_queue_endpoint_diagnostics
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -145,6 +146,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
         self.odata_metadata: dict[str, Any] = {}
         self.entity_set_status_diagnostics: dict[str, Any] = {}
         self.central_queue_status_diagnostics: dict[str, Any] = {}
+        self.queue_endpoint_diagnostics: dict[str, Any] = {}
         self.agent_engine_diagnostics: dict[str, Any] = {}
         self.state_engine_diagnostics: dict[str, Any] = {}
         self.live_state = ThreeCXLiveState()
@@ -215,6 +217,7 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             "timeline": list(self.event_history[-25:]),
             "agent_engine": self.agent_engine_diagnostics,
             "central_queue_status": self.central_queue_status_diagnostics,
+            "queue_endpoint_diagnostics": self.queue_endpoint_diagnostics,
             "live_state": self.live_state.diagnostics(),
         }
 
@@ -242,9 +245,16 @@ class ThreeCXDataUpdateCoordinator(DataUpdateCoordinator[ThreeCXSnapshot]):
             )
             self.central_queue_status_diagnostics = central_diagnostics
 
+            self.queue_endpoint_diagnostics = await async_run_queue_endpoint_diagnostics(
+                self.client,
+                snapshot,
+                self.odata_metadata,
+            )
+
             diagnostics["_odata_metadata"] = self.odata_metadata
             diagnostics["_entity_set_status"] = entity_set_diagnostics
             diagnostics["_central_queue_status"] = central_diagnostics
+            diagnostics["_queue_endpoint_diagnostics"] = self.queue_endpoint_diagnostics
             self.queue_agent_diagnostics = diagnostics
 
             snapshot.extension_records = self.client._enrich_extensions_with_queues(  # noqa: SLF001
